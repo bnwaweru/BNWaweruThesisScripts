@@ -1,2 +1,2 @@
 # BNWaweruThesisScripts
-A collection of scripts used used in various chapters of my PhD thesis
+A collection of scripts used in various chapters of my PhD thesis
