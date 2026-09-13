@@ -1,0 +1,1214 @@
+---
+title: "Methods used to extract relevant variation and haplotype data"
+author: "Bernice N Waweru"
+date: "`r Sys.Date()`"
+output:
+  github_document:
+    html_preview: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = F)
+setwd("/Users/waweru/Documents/2022/kmc_IBSpy_AP/Yr5-7-Sp_2B_nov_2022/")
+```
+
+# 1. Data preparation
+
+This section extracts the target-region data, imports it into R and prepares the reference, block, syntenic-window and haplotype variables used in the plots.
+
+## 1.1 Extract the target-region data
+
+Affinity propagation data that is most recent found in the folder [here](/Volumes/Research-Groups/Cristobal-Uauy/Jesus/14_watseq_affinity/groups), based on the `groups` that were used to run the clustering with AP.
+From the  [Marchal et al.,2018](https://www.nature.com/articles/s41477-018-0236-4.pdf) paper, the list of varieties/queries to use first are here:  `/Users/waweru/Documents/2022/kmc_IBSpy_AP/Yr5-7-Sp_2B_nov_2022/yellow_rust_uniq_queries_with_IBSpy_data_238_sorted_list_dec062022.txt`. The list contains 243 names of queries and others are pangenomes reference names as in the table below. 
+For more information added the pangenome lines as queries to the list, some of which have multiple entries (different coverage). Final list has 255 queries.
+
+```{r, yr-queries}
+require(magrittr)
+require(kableExtra)
+yr5_7_queries <- read.table(file = "/Users/waweru/Documents/2022/kmc_IBSpy_AP/Yr5-7-Sp_2B_nov_2022/yellow_rust_uniq_queries_with_IBSpy_data_238_sorted_list_dec062022.txt")
+#yr5_7_queries$X <- NULL
+names(yr5_7_queries) <- "query"
+nrow(yr5_7_queries)
+
+yr5_7_queries %>% head()
+
+```
+
+The list is used in the script to extract the data from the position we need from the larger file with the data on chromosome 2B. Using data from group `WatSeq_Pangenome_ABD`, with 1124 queries as in the table.
+
+```{r, WatSeq_Pangenome_RAGT_ABD_queries}
+
+ap_file_group_queries <- read.table(file = "/Users/waweru/Documents/2022/kmc_IBSpy_AP/Yr5-7-Sp_2B_nov_2022/query_list_ap_WatSeq_Pangenome_RAGT.txt")
+names(ap_file_group_queries) <- "query"
+ap_file_group_queries %>% head()
+
+```
+
+From the affinity propagation result file, corresponding rows of data for queries in the yr query list are extracted with the below script. In the query list to capture all the various lines of a query with different versions/dataset (mainly the pangenome lines), have it in small caps in the genotype/query list file
+
+To extract data from all references, the switch was the name of the reference and the start and end coordinates accordingly.
+
+```{r, eval=FALSE, engine='bash'}
+#!/bin/bash
+#SBATCH --partition=jic-short,nbi-medium,jic-medium,nbi-long,jic-long,RG-Cristobal-Uauy
+#SBATCH --nodes=1
+#SBATCH --cpus=1
+#SBATCH --mem 10G
+#SBATCH -o ~/extract_variations_nov2022/scripts/batch_logs/get_var.%N.%j.out # STDOUT
+#SBATCH -e ~/extract_variations_nov2022/scripts/batch_logs/get_var.%N.%j.err # STDERR
+#SBATCH --job-name=var
+
+
+
+group=WatSeq_Pangenome_ABD # grouping, line used in the affinity propagation
+dmp_dir=high_dmp # the dmp values range used in affinity propagation
+ibs_window=50000
+chromosome=chr2B # chromosome of interest
+
+# assembly to extract data from and the coordinates
+#assembly=chinese 
+#start=680000000
+#end=690000000
+
+
+#assembly=arinalrfor
+#start=690000000
+#end=699000000
+
+#assembly=jagger
+#start=680000000
+#end=690000000
+
+#assembly=julius
+#start=676000000
+#end=684000000
+
+#assembly=lancer
+#start=569000000
+#end=577000000
+
+#assembly=landmark
+#start=678000000
+#end=687000000
+
+#assembly=mace
+#start=673000000
+#end=682000000
+
+#assembly=norin61
+#start=682000000
+#end=693000000
+
+assembly=stanley
+start=683000000
+end=693000000
+
+# file variables
+db_dir=~/14_watseq_affinity/groups/${group}/${assembly}/${dmp_dir}/${ibs_window}w
+scripts_dir='~/extract_variations_nov2022/scripts' # where the scripts and the lsit of genotypes we want variations for are located
+
+echo $db_dir
+
+in_file=$db_dir/${chromosome}_${assembly}_19w_${group}.tsv.gz
+
+echo $in_file
+
+# query list
+genotypes_f=$scripts_dir/yellow_rust_uniq_queries_with_IBSpy_data_238_sorted_list_nov26222022.txt # check the characters if importing fromexcel. best to open the csv and save the list in command line to avoid office end pf line characters (M^)
+genotypes_f=$scripts_dir/yellow_rust_uniq_queries_with_IBSpy_data_238_sorted_list_dec062022.txt # this list inlcudes the pangenome lines, and because there are several datasets of the pangenomes, rather that the 256 names of wueries the list, the ones extracted will likely be more
+
+cd ~/extract_variations_nov2022/
+mkdir -p yr_marchal_2018
+out_dir=yr_marchal_2018
+
+#zcat ${in_file}| \
+#grep -w -f ${genotypes_f} | \
+#cut -f1,2,3,4,5,6,7,8,9,10,11,12,13 |
+#awk -v start="$start" -v end="$end" 'NR==1 || $2>=start && $2<=end {print}' 
+#awk '{ if ($2 >= "$start" && $3 <= "$end") print $0}'> $out_dir/${chromosome}_${assembly}_19w_${group}_${dmp_dir}_${start}_${end}_vars_haps.tsv
+
+date=$(date +'%m_%d_%Y')
+
+echo ${date}
+zcat ${in_file} | awk -v a=$start -v b=$end '{ if ($2 >=a && $3 <=b) print $0}' | grep -w -f ${genotypes_f} > $out_dir/${chromosome}_${assembly}_19w_${group}_${dmp_dir}_${start}_${end}_vars_haps_v2_${date}.tsv
+
+```
+
+
+The hypotheses currently are that;
+
+  1. Using different references to extract/pull out the syntenic windows get different information on syntenic windows based on the reference being used and further
+  2. Outside of NLR regions, genomic regions are very similar, however within the NLR/genic regions, references will only extract/pull out syntenic windows from references similar to it at those regions.
+ 
+ For this we are looking into the Yr5/7 region on chromosome 2B of wheat. Based on the [Marchal et al.,2018](https://www.nature.com/articles/s41477-018-0236-4.pdf), the pangenome lines are categorized/grouped into three. 
+ 
+  1. Group one - Landmark, Mace, Stanley and SY Mattis
+  2. Group two - Lancer and Julius
+  3. Group three - Arina, Norin-61, Jagger and Chinese Spring.
+  
+![Schematic representaion of the Yr region on chromosome 2B in ten wheat varieties](/Users/waweru/Documents/2022/kmc_IBSpy_AP/Yr5-7-Sp_2B_nov_2022/resources/comparative_genomics-wheat_BED_NLR_2020/genes-11-01406-g001.png)
+  
+
+We extract the variation and haplotype data with each reference and compare the syntenic windows extracted by each and go further to look at the haplotype grouping.
+  
+
+## 1.2 Import and clean the data
+
+Once data is extracted, move to `udrive` and import to R;
+
+### Load required R packages
+
+```{r load-libraries, results='hide', warning=FALSE,message=FALSE}
+
+setwd("/Users/waweru/Documents/2022/kmc_IBSpy_AP/Yr5-7-Sp_2B_nov_2022/")
+#BiocManager::install("ComplexHeatmap")
+
+library(magrittr)
+library(tidyverse)
+library(readr)
+library(tidyr)
+library(dplyr)
+library(plyr)
+library(stringr)
+library(ggplot2)
+#library(dendextend)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(data.table)
+library(scales)
+options(scipen = 999)
+library(flextable)
+library(kableExtra)
+
+```
+
+### Set file paths and analysis variables
+
+Set variables so that from here one can choose which reference to work with for the rest of the analysis.
+
+```{r, eval=FALSE, echo=FALSE, engine='asis'}
+## useful pages for regex and file paths matching
+
+https://community.rstudio.com/t/how-do-i-find-all-the-files-with-name-containing-certain-word-and-re-name-these-files/106960/2
+https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions/Cheatsheet
+
+https://stackoverflow.com/questions/2912894/how-to-match-any-character-in-regular-expression
+
+https://rdrr.io/r/base/regex.html
+
+https://r4ds.hadley.nz/regexps.html
+
+https://rmarkdown.rstudio.com/github_document_format.html
+
+https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html
+```
+
+
+```{r set-path-variables}
+
+#directory with the data
+in_dir <- "/Volumes/waweru/Yr5_YrSp_Yr7/variations_extracted_jan_2023/"
+#in_dir <- "/Volumes/waweru/Yr5_YrSp_Yr7/chr2B_yr7_WatSeq_Pangenome_RAGT_AeTau_Wilds_ABD_high_dmp_ap_files/"
+
+# to get the file we use the below regular expression with the name of the reference as needed
+# arinalrfor, chinese, jagger, julius, lancer, landmark, mace, norin61, stanley, sy_mattis
+# the name of the references have to be exactly as saved in the data by Jesus, as those names are inherited in the file naming in the extraction script above
+
+
+ref_file <- list.files(in_dir, pattern = ".*chinese_.*tsv$") 
+ref_file
+ref_name <- "Chinese Spring" 
+# the reference to which the sytenic regions of other references are based, all extracted windows will be based on what data what pulled out based on this reference
+PanRef <- "chi"   # write the three-letters code for the reference Pan-genome used to calculate the variations:
+                  # chi -> Chinese Spring, Jag -> Jagger, mac -> Mace, jul -> Julius, SYM -> SY Mattis, Sta -> Stanley, 
+                  # Nor -> Norin-61, Ari -> Arina, Lan -> Landmark, Lac -> Lancer, spe -> Spelta 
+
+# the name of the file with the data we want, removing the file extension so that we remain with part of the file names with useful information, that will be used to create result files
+
+# symattis date is 02_20_2023
+
+file_id <- gsub("_vars_haps_v2_01_09_2023.tsv", "", ref_file) 
+#file_id <- gsub("_vars_haps_v2_02_20_2023.tsv", "", ref_file)
+
+file_id
+
+dmp_dir="high_dmp" # the dmp directory with he data in the groups folder
+chr <- "chr2B" # write the chromosome id
+
+# using a regular expression to extract the start and end coordinates from the file id
+regmatches(file_id, gregexpr("[[:digit:]]+", file_id))  %>% unlist() %>% as.numeric() # this extract all the  numeric values in a string and gives the output as a list, following command unlists, converts to numeric then last one extracts based on position in the vector
+ 
+region_start <- as.numeric(unlist(regmatches(file_id, gregexpr("[[:digit:]]+", file_id)))) %>%  nth(., 3) #the start of the region of interest
+region_end <-  as.numeric(unlist(regmatches(file_id, gregexpr("[[:digit:]]+", file_id)))) %>%  nth(., 4) # the end of the region of interest
+
+# for norin-61 there is the extra digit "61" so we change this manually for now, for future, find a regex expression to extract just the start and end digits
+
+#region_start <- as.numeric(unlist(regmatches(file_id, gregexpr("[[:digit:]]+", file_id)))) %>%  nth(., 4) #the start of the region of interest
+#region_end <-  as.numeric(unlist(regmatches(file_id, gregexpr("[[:digit:]]+", file_id)))) %>%  nth(., 5) # the end of the region of interest
+
+window_size <- 50000 # window size can be found as a part of the file name (like 50000 in the file "chr2D_jagger_19w_50000ibs") 
+block_size <- 1000000 # this is usually 1000000 (1MB)
+w <- block_size/window_size
+w # number of blocks (50000 kb windows) in every 1mb
+# create identifier for the chromosomal region
+region_id <- paste0(chr,"_",region_start,"-",region_end)
+print(region_id)
+
+# outputs directory
+out_dir <- "/Users/waweru/Documents/2022/kmc_IBSpy_AP/Yr5-7-Sp_2B_nov_2022/"
+# create a new folder with a name consists of the file name and the region name. all the results will be saved in this folder  
+results <- paste0(file_id)
+dir.create(file.path(out_dir, results), showWarnings = TRUE)
+
+```
+
+### Import the extracted data
+
+```{r import-data}
+
+# this set of data has the pangenome lines as queries
+ap_data <- read.table(file = paste0(in_dir,ref_file), header = F)
+
+## add column names
+# the headers are extracted from the header line of the larger file from which we extracted the data
+# should be 17 columns
+# group column is the haplotype group assigned
+
+header_names<- c("chr", "start", "end", "query", "window", "variations", "variations_scl", "group", "sc_score","damping", "w_num", "dmp_num", "std", "median", "mean","skew","kurt")
+length(header_names)
+
+names(ap_data) <- header_names
+
+head(ap_data)  
+
+# moving forth we do not need the last 5 columns of the data 
+ap_data <- ap_data[,c(1:12)]
+
+# check how many queries are in the data set
+# 275 wth the pangenome queries
+ap_data$query %>% unique() %>% length() 
+
+#as.data.frame(unique(ap_data$query)) # cadenza, paragon and robigus and the pangenome queries have different sets of data, OK
+```
+
+
+### Identify the reference for each syntenic window
+
+
+```{r}
+tail(ap_data)
+
+# add a new column with the reference wheat pan-genome that correspond with the one used in the column "window"     
+
+substit <- paste0(chr,"_Wh")
+substit
+Chr <- paste0(chr,"_") 
+Chr
+ap_data$window <- gsub(substit,"",ap_data$window) # replaces in the string the common chr2B_Wh with nothing, so that now the first letters are the abbreviations of the reference
+head(ap_data)  
+
+
+ap_data$window <- gsub(Chr,"chi_",ap_data$window) # where the windows are from chinese spring, they are still named chr, replace those with the abbreviation for it which is `chi`
+
+#head(ap_data)
+tail(ap_data)  
+
+# replace "lan" in ap_data$reference$window with "Lac" for Lancer to avoid confusion with "Lan" for Landmark:
+ap_data$window <- gsub("lan","Lac",ap_data$window)
+
+reference <- ap_data$window
+head(reference)
+ap_data$reference <- str_sub(reference, start = 1L, end = 3L) # create the reference column, picking only the first three characters of in the column window, which are the three letter abbreviations for the reference
+
+
+
+head(ap_data)  
+unique(ap_data$reference) # "chi" "Ari" "Jag" "Lan" "Nor" "SYM" "Sta" "Lac" "mac" "spe" 10 references
+
+
+```
+
+
+### Replace abbreviated reference names with full names
+
+
+```{r}
+# replace the the three-letters code for the reference Pan-genome with the full name:
+# chi -> Chinese Spring, Jag -> Jagger, mac -> Mace, jul -> Julius, SYM -> SY Mattis, Sta -> Stanley, 
+# Nor -> Norin-61, Ari -> Arina, Lan -> Landmark, Lac -> Lancer, spe -> Spelta  
+ap_data$reference <- gsub("chi","Chinese Spring",ap_data$reference)
+ap_data$reference <- gsub("Jag","Jagger",ap_data$reference)
+ap_data$reference <- gsub("mac","Mace",ap_data$reference)
+ap_data$reference <- gsub("jul","Julius",ap_data$reference)
+ap_data$reference<- gsub("SYM","SY Mattis",ap_data$reference)
+ap_data$reference <- gsub("Sta","Stanley",ap_data$reference)
+ap_data$reference <- gsub("Nor","Norin-61",ap_data$reference)
+ap_data$reference <- gsub("Ari","Arina",ap_data$reference)
+ap_data$reference <- gsub("Lan","Landmark",ap_data$reference)
+ap_data$reference <- gsub("Lac","Lancer",ap_data$reference)
+ap_data$reference<- gsub("spe","Spelta",ap_data$reference)
+unique(ap_data$reference) # 
+```
+
+
+### Create block and window-block identifiers
+
+```{r}
+
+# create a "block" column 
+ap_data$block <- paste0(chr,"_",PanRef,"_",ap_data$start,"_",ap_data$end)
+head(ap_data)  
+#ap_data$reference_window <- paste0(chr,"_",PanRef,"_",ap_data$start,"_",ap_data$end)
+#head(ap_data)
+ap_data$window_block <- paste0(ap_data$window,"_",ap_data$block)
+head(ap_data)  
+```
+
+In the window column, remove the reference name so that we are left only with the coordinates of the syntenic window in the particular reference 
+
+```{r}
+ap_data$window <- gsub("chi_","",ap_data$window)
+ap_data$window <- gsub("Jag_","",ap_data$window)
+ap_data$window <- gsub("mac_","",ap_data$window)
+ap_data$window <- gsub("jul_","",ap_data$window)
+ap_data$window <- gsub("SYM_","",ap_data$window)
+ap_data$window <- gsub("Sta_","",ap_data$window)
+ap_data$window <- gsub("Nor_","",ap_data$window)
+ap_data$window <- gsub("Ari_","",ap_data$window)
+ap_data$window <- gsub("Lan_","",ap_data$window)
+ap_data$window <- gsub("Lac_","",ap_data$window)
+ap_data$window <- gsub("spe_","",ap_data$window)
+length(unique(ap_data$window))
+length(unique(ap_data$reference))
+head(ap_data)  
+```
+
+### Save the cleaned data
+
+```{r save-data, eval=FALSE}
+
+# save the data
+write.csv(file=paste0(out_dir,results,"/variations+haplotypes_",file_id,".csv"),ap_data) 
+ap_data <- read.csv(file=paste0(out_dir,results,"/variations+haplotypes_",file_id,".csv"), header=T) 
+head(ap_data)
+
+# remove the column with th X identifier caused by reading the file afresh from csv, otherwise it causes sub-setting of the wrong columns later on in plotting
+ap_data$X <- NULL
+head(ap_data)
+dim(ap_data)
+
+```
+
+
+### Count syntenic windows from each reference within every block
+
+```{r}
+ap_data[1,4] # first query name to use in the filter
+
+ap_data  %>% select(query, block, window,reference) %>% filter(query == ap_data[1,4])  %>% group_by(block,reference) %>% dplyr::summarise(., win_num=n()) %>% print(n = (nrow(.)))  
+                                                                                                                                                               
+ap_data  %>% select(query, block, window,reference) %>% filter(query == ap_data[1,4])  %>% group_by(block,reference) %>% dplyr::summarise(., win_num=n()) %>% print(n = (nrow(.))) %>% as.data.frame() -> ref_window_numbers
+
+# spread the data so we have the references as the columns and block with values spread out, so that we can compile easily in excel
+spread(ref_window_numbers, key = block, value = win_num, fill = 0) -> ref_window_numbers
+
+# save it as a csv file
+
+#write.csv(file=paste0(out_dir,results,"/ref_window_numbers_",file_id,".csv"),ref_window_numbers) 
+
+```
+
+
+```{r,include=FALSE,eval=FALSE}
+# read in the files already generated and spread the data 
+# arinalrffor
+read.csv("chr2B_arinalrfor_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_690000000_699000000/ref_window_numbers_chr2B_arinalrfor_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_690000000_699000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+spread(ref_window_numbers, key = block, value = win_num, fill = 0) -> ref_window_numbers
+
+write.csv(ref_window_numbers, file = "chr2B_arinalrfor_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_690000000_699000000/ref_window_numbers_chr2B_arinalrfor_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_690000000_699000000.csv")
+
+## chinese spring
+
+read.csv("chr2B_chinese_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000/ref_window_numbers_chr2B_chinese_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+spread(ref_window_numbers, key = block, value = win_num, fill = 0) -> ref_window_numbers
+
+write.csv(ref_window_numbers, file = "chr2B_chinese_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000/ref_window_numbers_chr2B_chinese_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000.csv")
+
+## jagger
+
+read.csv("chr2B_jagger_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000/ref_window_numbers_chr2B_jagger_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000.csv", header = T) ->ref_window_numbers
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+spread(ref_window_numbers, key = block, value = win_num, fill = 0) -> ref_window_numbers
+ref_window_numbers
+
+write.csv(ref_window_numbers, "chr2B_jagger_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000/ref_window_numbers_chr2B_jagger_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000.csv")
+
+## julius
+
+read.csv("chr2B_julius_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_676000000_684000000/ref_window_numbers_chr2B_julius_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_676000000_684000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+spread(ref_window_numbers, key = block, value = win_num, fill = 0) -> ref_window_numbers
+ref_window_numbers
+
+write.csv(ref_window_numbers, "chr2B_julius_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_676000000_684000000/ref_window_numbers_chr2B_julius_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_676000000_684000000.csv")
+
+## Lancer
+
+read.csv("chr2B_lancer_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_569000000_577000000/ref_window_numbers_chr2B_lancer_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_569000000_577000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+spread(ref_window_numbers, key = block, value = win_num, fill = 0) -> ref_window_numbers
+ref_window_numbers
+
+write.csv(ref_window_numbers, "chr2B_lancer_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_569000000_577000000/ref_window_numbers_chr2B_lancer_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_569000000_577000000.csv")
+
+# Landmark
+
+read.csv("chr2B_landmark_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_678000000_687000000/ref_window_numbers_chr2B_landmark_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_678000000_687000000.csv", header = T) -> ref_window_numbers
+
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+spread(ref_window_numbers, key = block, value = win_num, fill = 0) -> ref_window_numbers
+ref_window_numbers
+
+write.csv(ref_window_numbers, "chr2B_landmark_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_678000000_687000000/ref_window_numbers_chr2B_landmark_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_678000000_687000000.csv")
+
+# Mace 
+
+read.csv("chr2B_mace_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_673000000_682000000/ref_window_numbers_chr2B_mace_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_673000000_682000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers$X <- NULL
+spread(ref_window_numbers, key = block, value = win_num, fill = 0) -> ref_window_numbers
+ref_window_numbers
+
+write.csv(ref_window_numbers, "chr2B_mace_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_673000000_682000000/ref_window_numbers_chr2B_mace_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_673000000_682000000.csv")
+
+## Norin-61
+
+read.csv("chr2B_norin61_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_682000000_693000000/ref_window_numbers_chr2B_norin61_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_682000000_693000000.csv", header = T) -> ref_window_numbers
+
+ref_window_numbers$X <- NULL
+spread(ref_window_numbers, key = block, value = win_num, fill = 0) -> ref_window_numbers
+ref_window_numbers
+
+write.csv(ref_window_numbers, "chr2B_norin61_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_682000000_693000000/ref_window_numbers_chr2B_norin61_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_682000000_693000000.csv")
+
+## Stanley
+
+read.csv("chr2B_stanley_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_683000000_693000000/ref_window_numbers_chr2B_stanley_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_683000000_693000000.csv", header = T) -> ref_window_numbers
+
+ref_window_numbers$X <- NULL
+
+spread(ref_window_numbers, key = block, value = win_num, fill = 0) -> ref_window_numbers
+ref_window_numbers
+
+```
+
+## 1.3 Generate the haplotype matrix
+
+The haplotype assignments are reshaped into a matrix with one accession per column for comparison across consecutive 1-Mb blocks.
+
+```{r, generate-haplotype-matrix}
+
+ap_data %>% head()  
+#ap_data$X <- NULL
+
+# create a column with the chr_start_end_query_group, 
+# the group value is the haplotype
+ 
+ap_data$start_end_query_haplotype <- paste0(ap_data$start,"-",ap_data$end,"/",ap_data$query,"/",ap_data$group)
+
+head(ap_data$start_end_query_haplotype)
+
+# next we filter for unique rows haplotypes, to ensure nothing is missed we sort first, although we now its already sorted
+
+ap_data$start_end_query_haplotype %>% sort() %>% unique() %>% str_split_fixed("/",3) %>% as.data.frame() -> yr_2B_haps
+
+##workaround fo the above due to corrupted library
+
+x <- sort(unique(ap_data$start_end_query_haplotype))
+
+yr_2B_haps <- as.data.frame(
+  t(vapply(
+    strsplit(x, "/", fixed = TRUE),
+    function(z) {
+      length(z) <- 3
+      z
+    },
+    character(3)
+  )),
+  stringsAsFactors = FALSE
+)
+
+# rename the column headers
+
+names(yr_2B_haps) <- c("window","query","haplotype")
+
+names(yr_2B_haps) 
+
+head(yr_2B_haps)  
+
+# spread the value of haplotype across the key query, so we have each query as its own column
+
+spread(yr_2B_haps, key = query, value = haplotype, fill = 0) %>% t() %>% as.data.frame() -> yr_2B_haps_df_spread_trans
+
+head(yr_2B_haps_df_spread_trans)  
+
+# save in a csv file  
+#write.csv(yr_2B_haps_df_spread_trans,file=paste0(out_dir,results,"/haplotypes_",file_id,".csv")) 
+
+```
+
+# 2. Plotting syntenic windows
+
+This section combines the syntenic-window counts across references and plots them as heatmaps for the complete panel and for Chinese Spring alone.
+
+## 2.1 Prepare files for the syntenic-window heatmap
+
+```{r}
+# first create a folder to store required files
+out_dir <- "/Users/waweru/Documents/2022/kmc_IBSpy_AP/Yr5-7-Sp_2B_nov_2022/"
+dir.create(file.path(out_dir, "ref_window_plotting_yr7_region"), showWarnings = T)
+```
+
+
+
+```{r,include=FALSE,eval=FALSE}
+#Create required data frames
+# read in the files and gather data, save it out to dataframe
+
+#######################
+# arinalrffor   #####
+######################
+
+read.csv("chr2B_arinalrfor_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_690000000_699000000/ref_window_numbers_chr2B_arinalrfor_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_690000000_699000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+ref_window_numbers %>% gather(key = "block", value = "num_windows", -reference)  %>% write.table(file=paste0(out_dir, "ref_window_plotting_yr7_region/","ref_window_numbers_chr2B_arinalrfor_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_690000000_699000000_plotting_df.txt"), sep = "\t")
+
+#######################
+# chinese spring   #####
+######################
+
+read.csv("chr2B_chinese_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000/ref_window_numbers_chr2B_chinese_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+ref_window_numbers %>% gather(key = "block", value = "num_windows", -reference)  %>% write.table(file=paste0(out_dir, "ref_window_plotting_yr7_region/","ref_window_numbers_chr2B_chinese_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000_plotting_df.txt"), sep = "\t")
+
+#######################
+# jagger   #####
+######################
+
+read.csv("chr2B_jagger_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000/ref_window_numbers_chr2B_jagger_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000.csv", header = T) ->ref_window_numbers
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+ref_window_numbers %>% gather(key = "block", value = "num_windows", -reference)  %>% write.table(file=paste0(out_dir, "ref_window_plotting_yr7_region/","ref_window_numbers_chr2B_jagger_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_680000000_690000000_plotting_df.txt"), sep = "\t")
+
+#######################
+# julius   #####
+######################
+
+read.csv("chr2B_julius_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_676000000_684000000/ref_window_numbers_chr2B_julius_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_676000000_684000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+ref_window_numbers %>% gather(key = "block", value = "num_windows", -reference)  %>% write.table(file=paste0(out_dir, "ref_window_plotting_yr7_region/","ref_window_numbers_chr2B_julius_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_676000000_684000000_plotting_df.txt"), sep = "\t")
+
+
+#######################
+# lancer   #####
+######################
+
+read.csv("chr2B_lancer_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_569000000_577000000/ref_window_numbers_chr2B_lancer_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_569000000_577000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+ref_window_numbers %>% gather(key = "block", value = "num_windows", -reference)  %>% write.table(file=paste0(out_dir, "ref_window_plotting_yr7_region/","ref_window_numbers_chr2B_lancer_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_569000000_577000000_plotting_df.txt"), sep = "\t")
+
+#######################
+# landmark   #####
+######################
+
+read.csv("chr2B_landmark_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_678000000_687000000/ref_window_numbers_chr2B_landmark_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_678000000_687000000.csv", header = T) -> ref_window_numbers
+
+ref_window_numbers
+ref_window_numbers$X <- NULL
+
+ref_window_numbers %>% gather(key = "block", value = "num_windows", -reference)  %>% write.table(file=paste0(out_dir, "ref_window_plotting_yr7_region/","ref_window_numbers_chr2B_landmark_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_678000000_687000000_plotting_df.txt"), sep = "\t")
+
+#######################
+# Mace  #####
+######################
+
+read.csv("chr2B_mace_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_673000000_682000000/ref_window_numbers_chr2B_mace_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_673000000_682000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers$X <- NULL
+ref_window_numbers
+
+ref_window_numbers %>% gather(key = "block", value = "num_windows", -reference)  %>% write.table(file=paste0(out_dir, "ref_window_plotting_yr7_region/","ref_window_numbers_chr2B_mace_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_673000000_682000000_plotting_df.txt"), sep = "\t")
+
+
+#######################
+# Norin-61   #####
+######################
+read.csv("chr2B_norin61_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_682000000_693000000/ref_window_numbers_chr2B_norin61_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_682000000_693000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers$X <- NULL
+ref_window_numbers
+
+ref_window_numbers %>% gather(key = "block", value = "num_windows", -reference)  %>% write.table(file=paste0(out_dir, "ref_window_plotting_yr7_region/","ref_window_numbers_chr2B_norin61_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_682000000_693000000_plotting_df.txt"), sep = "\t")
+
+
+#######################
+# Stanley   #####
+######################
+
+read.csv("chr2B_stanley_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_683000000_693000000/ref_window_numbers_chr2B_stanley_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_683000000_693000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers$X <- NULL
+ref_window_numbers
+
+ref_window_numbers %>% gather(key = "block", value = "num_windows", -reference)  %>% write.table(file=paste0(out_dir, "ref_window_plotting_yr7_region/","ref_window_numbers_chr2B_stanley_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_683000000_693000000_plotting_df.txt"), sep = "\t")
+
+
+#######################
+# Sy_Mattis  #####
+######################
+
+read.csv("chr2B_sy_mattis_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_681000000_689000000/ref_window_numbers_chr2B_sy_mattis_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_681000000_689000000.csv", header = T) -> ref_window_numbers
+ref_window_numbers$X <- NULL
+ref_window_numbers
+
+ref_window_numbers %>% gather(key = "block", value = "num_windows", -reference)  %>% write.table(file=paste0(out_dir, "ref_window_plotting_yr7_region/","ref_window_numbers_chr2B_sy_mattis_19w_WatSeq_Pangenome_RAGT_ABD_high_dmp_681000000_689000000_plotting_df.txt"), sep = "\t")
+
+
+```
+
+## 2.2 Combine and format the syntenic-window data
+
+The reference-specific tables are combined and labelled for faceting and plotting.
+
+```{r}
+# add pattern to make sure we are always reading the correct file
+list.files(paste0(out_dir,"ref_window_plotting_yr7_region/"), pattern = "*_plotting_df.txt$")
+
+# first change into directory with files
+
+setwd(paste0(out_dir,"ref_window_plotting_yr7_region/"))
+getwd()
+# read in the data and bind to one table
+
+ref_wind_plotting_df <- list.files(paste0(out_dir,"ref_window_plotting_yr7_region/"), pattern = "*_plotting_df.txt$") %>% 
+  lapply(read.table, sep = "\t") %>%
+  bind_rows 
+
+# now we need to separate the block column into the name of the reference and the block, sow can use this as faceting and plotting variables
+
+substr(ref_wind_plotting_df$block, 7,9)  %>% head()# this gets the name of the reference
+
+substr(ref_wind_plotting_df$block,11,length(ref_wind_plotting_df$block)) %>% head() # this gets the block of the reference above
+
+# do both to create columns in the data frame
+
+ref_wind_plotting_df <- ref_wind_plotting_df %>% mutate(pang_ref = substr(block, 7,9)) %>% mutate(pang_block = substr(block,11,length(block))) 
+
+# replace the short reference name with the full refernce name
+ref_wind_plotting_df$pang_ref <- gsub("chi","Chinese Spring",ref_wind_plotting_df$pang_ref)
+ref_wind_plotting_df$pang_ref <- gsub("Jag","Jagger",ref_wind_plotting_df$pang_ref )
+ref_wind_plotting_df$pang_ref  <- gsub("mac","Mace",ref_wind_plotting_df$pang_ref )
+ref_wind_plotting_df$pang_ref  <- gsub("jul","Julius",ref_wind_plotting_df$pang_ref )
+ref_wind_plotting_df$pang_ref <- gsub("SYM","SY Mattis",ref_wind_plotting_df$pang_ref )
+ref_wind_plotting_df$pang_ref  <- gsub("Sta","Stanley",ref_wind_plotting_df$pang_ref)
+ref_wind_plotting_df$pang_ref <- gsub("Nor","Norin-61",ref_wind_plotting_df$pang_ref )
+ref_wind_plotting_df$pang_ref  <- gsub("Ari","Arina",ref_wind_plotting_df$pang_ref )
+ref_wind_plotting_df$pang_ref  <- gsub("Lan","Landmark",ref_wind_plotting_df$pang_ref )
+ref_wind_plotting_df$pang_ref  <- gsub("Lac","Lancer",ref_wind_plotting_df$pang_ref )
+
+#ref_wind_plotting_df$pang_ref <- gsub("spe","Spelta",ref_wind_plotting_df$pang_ref )
+
+unique(ref_wind_plotting_df$pang_ref)
+unique(ref_wind_plotting_df$reference)
+ref_wind_plotting_df$reference <- gsub("Norin61","Norin-61",ref_wind_plotting_df$reference )
+
+ref_wind_plotting_df %>% head(n=10)  
+
+```
+
+## 2.3 Plot the syntenic-window heatmap
+
+```{r, fig.height=8,fig.width=12,fig.align='center'}
+
+# for this Yr7 region we already know how the references behave, we rearrange, when we don't for other target region, we first plot then rearrange based on observed patterns
+
+ref_wind_plotting_df$pang_ref <- factor(ref_wind_plotting_df$pang_ref, levels = c("Chinese Spring", "Jagger", "Norin-61", "Arina","Julius","Lancer", "Landmark", "Mace","Stanley", "SY Mattis"))
+
+
+levels(ref_wind_plotting_df$pang_ref)
+levels(ref_wind_plotting_df$reference)
+# plot
+
+ref_plot <- ref_wind_plotting_df %>% 
+  ggplot(aes(x= pang_block, y = reference, fill = num_windows)) +
+  geom_tile() +
+  facet_grid( ~ pang_ref, scales = "free") +
+  # putting the labels on top for block number
+  scale_x_discrete(position = "top") +
+  # formatting the axis labels
+  theme(axis.text.x = element_text(angle = 90, size = 7, vjust = 1)) +
+  # adding colours
+  scale_fill_gradient(low="#D55E00", high="#009E73") +
+  # remove x axis label
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +
+  labs(fill = "Number of \n syntenic windows") +
+  ggtitle("Syntenic windows by reference based on Yr7 region of Chinese Spring")
+
+print(ref_plot)
+
+```
+
+```{r}
+head(ref_wind_plotting_df)
+```
+
+## 2.4 Order references and genomic blocks
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+ref_order <- c(
+  "Chinese Spring", "Jagger", "Norin-61", "Arina",
+  "Julius", "Lancer", "Landmark", "Mace",
+  "Stanley", "SY Mattis"
+)
+
+ref_order_rows <- c(
+  "Chinese Spring", "Jagger", "Norin-61", "Arina",
+  "Julius", "Lancer", "Landmark", "Mace",
+  "Stanley", "SY Mattis","Spelta"
+)
+
+ref_wind_plotting_df$reference
+ref_wind_plotting_df <- ref_wind_plotting_df %>%
+  mutate(
+    # Order facets from left to right
+    pang_ref = factor(pang_ref, levels = ref_order),
+
+    # Reverse levels so the same order appears from top to bottom
+    reference = factor(reference, levels = rev(ref_order_rows)),
+
+    # Extract block start and end coordinates
+    block_start = as.numeric(sub("_.*$", "", pang_block)),
+    block_end   = as.numeric(sub("^.*_", "", pang_block)),
+
+    # Convert coordinates to rounded Mb labels
+    pang_block_mb = paste0(
+      round(block_start / 1e6), "\u2013",
+      round(block_end / 1e6), " Mb"
+    )
+  ) %>%
+  arrange(pang_ref, block_start) %>%
+  mutate(
+    # Preserve numerical rather than alphabetical block order
+    pang_block_mb = factor(
+      pang_block_mb,
+      levels = unique(pang_block_mb[order(block_start)])
+    )
+  )
+
+
+#### now to plot 
+ref_plot <- ref_wind_plotting_df %>%
+  ggplot(
+    aes(
+      x = pang_block_mb,
+      y = reference,
+      fill = num_windows
+    )
+  ) +
+  geom_tile() +
+  facet_grid(
+    ~ pang_ref,
+    scales = "free_x",
+    space = "free_x",
+    drop = FALSE
+  ) +
+  scale_x_discrete(position = "top") +
+  scale_y_discrete(drop = FALSE) +
+  scale_fill_gradient(
+    low = "#D55E00",
+    high = "#009E73"
+  ) +
+  labs(
+    title = "Syntenic windows by reference based on Yr7 region of Chinese Spring",
+    x = NULL,
+    y = NULL,
+    fill = "Number of\nsyntenic windows"
+  ) +
+  theme(
+    axis.text.x = element_text(
+      angle = 90,
+      size = 7,
+      vjust = 1,
+      hjust = 0
+    ),
+  strip.text.x = element_text(
+    size = 11,
+    face = "bold"
+  )
+  )
+
+print(ref_plot)
+```
+
+### Save the complete heatmap
+
+```{r}
+
+ggsave(
+  filename = paste0(out_dir,"ref_window_plotting_yr7_region/Thesis_syntenic_windows_heatmap.pdf"),
+  plot = ref_plot,
+  device = cairo_pdf,
+  width = 14,
+  height = 8,
+  units = "in",
+  bg = "white"
+)
+```
+
+## 2.5 Plot Chinese Spring as the primary reference
+```{r}
+### no to plot 
+ref_plot_CS <- ref_wind_plotting_df %>% filter(pang_ref == "Chinese Spring" ) %>% 
+  ggplot(
+    aes(
+      x = pang_block_mb,
+      y = reference,
+      fill = num_windows
+    )
+  ) +
+  geom_tile() +
+
+  
+  scale_x_discrete(position = "top") +
+  scale_y_discrete(drop = FALSE) +
+  scale_fill_gradient(
+    low = "#D55E00",
+    high = "#009E73"
+  ) +
+  labs(
+    title = "Yr7 Interval on chr2B of Chinese Spring",
+    x = NULL,
+    y = NULL,
+    fill = "Number of\nsyntenic windows"
+  ) +
+  theme(
+    axis.text.x = element_text(
+      angle = 90,
+      size = 7,
+      vjust = 1,
+      hjust = 0
+    ),
+  strip.text.x = element_text(
+    size = 11,
+    face = "bold"
+  )
+  )
+
+print(ref_plot_CS)
+
+
+ggsave(
+  filename = paste0(out_dir,"ref_window_plotting_yr7_region/Thesis_syntenic_windows_heatmap_CSonly.pdf"),
+  plot = ref_plot_CS,
+  device = cairo_pdf,
+  width = 6,
+  height = 8,
+  units = "in",
+  bg = "white"
+)
+```
+
+
+# 3. Plotting variation line plots
+
+This section selects the required accessions and references, prepares genomic positions and plots the raw IBSpy variation counts across the *Yr7* interval.
+
+## 3.1 Prepare the line-plot data
+
+Select only the columns required for plotting the variation profiles from the larger data set.
+
+```{r, sel-p}
+
+# save the data
+#write.csv(file=paste0(out_dir,results,"/variations+haplotypes_",file_id,".csv"),ap_data) 
+ap_data <- read.csv(file=paste0(out_dir,results,"/variations+haplotypes_",file_id,".csv"), header=T) 
+head(ap_data)
+
+# remove the column with th X identifier caused by reading the file afresh from csv, otherwise it causes sub-setting of the wrong columns later on in plotting
+ap_data$X <- NULL
+head(ap_data)
+dim(ap_data)
+
+# create a column with the chr_start_end_query_group, 
+# the group value is the haplotype
+ap_data$start_end_query_haplotype <- paste0(ap_data$start,"-",ap_data$end,"/",ap_data$query,"/",ap_data$group)
+
+head(ap_data$start_end_query_haplotype)
+
+
+#  Get onlty the colomns we need for plotting
+
+line_plot_df <- ap_data[,c(14,15,2:4,13,5:7)]  ## leaving out the chr,start and end columns
+head(line_plot_df)  
+
+unique(line_plot_df$reference)
+dim(line_plot_df)
+
+```
+
+### Optionally reorder the references
+```{r, eval=FALSE, include=FALSE}
+#also useful to order the references so that references in the plotting we see the references that are together in the groupings
+
+line_plot_df$reference <- as.factor(line_plot_df$reference)
+
+
+levels(line_plot_df$reference)
+
+
+```
+
+### Calculate plot dimensions
+
+```{r}
+
+##### generate scaling values based on the number of references and windows, so that the images look okay
+
+x <- length(unique(line_plot_df$reference))
+x
+W <- length(unique(line_plot_df$window))
+W
+w
+# get the number of queries, used to adjust plotting parameters
+
+num_queries <- length(unique(line_plot_df$query))
+num_queries
+
+```
+
+## 3.2 Define accession sets and colours
+
+Define the accessions used in each comparison and retain consistent colours when the primary reference changes.
+```{r}
+
+line_plot_df$reference <- as.factor(line_plot_df$reference)
+
+levels(line_plot_df$reference)
+# cadenza, prophet, sportsman, trafalgar, thather
+cad_pr_sp_tr_th_mace_stanley <- c("cadenza","mace-pg","Prophet","Sportsman","stanley-pg", "Thatcher","Trafalgar" )
+
+# colors to use,important so that even when we change reference, the colors sre consistent
+cad_pr_sp_tr_th_mace_stanley_cols <- c("purple1", "deeppink","blue", "deepskyblue1", "chartreuse3" ,"salmon3", "royalblue3"  )
+
+# cadenza, prophet, sportsman, trafalgar, thather
+cad_that_par <- c("cadenza","paragon","Thatcher" )
+
+# colors to use,important so that even when we change reference, the colors are consistent
+cad_that_par_cols <- c("purple1" , "goldenrod2","salmon3")
+
+######
+
+cad_that_pargn_cord_spark <- c("cadenza", "Thatcher","paragon","Cordiale","Spark") 
+
+cad_that_pargn_cord_spark_cols <- c("purple1","salmon3","goldenrod2","lightpink","steelblue3")
+
+cad_that_cord_spark <- c("cadenza","Cordiale","Spark", "Thatcher") 
+
+cad_that_cord_spark_cols <- c("purple1","lightpink","steelblue3","salmon3")
+
+########
+cad_cord_sp_th_timoph4 <- c("cadenza", "Cordiale", "julius-pg", "Spark", "Thatcher", "timopheevii10827-10x-all_all", "timopheevii17024-10x_all", "timopheevi33255-10x_nuq","timopheevii10558_nuq.jf") 
+
+cad_cord_sp_th_timoph4_cols <- c("purple1","lightpink","chocolate1", "steelblue3","salmon3",  "dodgerblue1", "firebrick4", "darkturquoise",  "violetred3" )
+
+
+########
+
+cad_that_prop_sport_traf <- c("cadenza","Prophet", "Sportsman", "Thatcher", "Trafalgar")
+
+cad_that_prop_sport_traf_cols <- c("purple1","blue", "deepskyblue1", "salmon3","royalblue3" )
+
+### this was only plotted with Landmark as the reference 
+# cadenza, prophet, sportsman, trafalgar, thather
+cad_pr_sp_tr_th_mace_stanley <- c("cadenza","mace-pg","Prophet","Sportsman","stanley-pg", "Thatcher","Trafalgar" )
+
+cad_pr_sp_tr_th_mace_stanley_cols <- c("purple1", "deeppink","blue", "deepskyblue1", "chartreuse3" ,"salmon3", "royalblue3"  )
+
+```
+
+## 3.3 Filter the plotting data and prepare genomic positions
+
+### Prepare the filtered plotting data and round window starts to the nearest 50 kb
+
+```{r}
+plotting_df <- line_plot_df %>%
+  filter(
+    query %in% cad_that_cord_spark,
+    reference == ref_name
+  ) %>%
+  mutate(
+    window_start_bp = as.numeric(sub("_.*$", "", window)),
+    window_start_mb = window_start_bp / 1e6
+  )
+```
+
+Create 50-kb breaks and labels for use where individual window ticks are required.
+
+```{r}
+x_breaks <- sort(unique(plotting_df$window_start_mb))
+
+x_labels <- ifelse(
+  seq_along(x_breaks) %% 5 == 0,
+  formatC(x_breaks, format = "f", digits = 2),
+  ""
+)
+
+```
+
+## 3.4 Plot and save the raw variation profiles
+
+Plot raw variation counts across the selected interval and add the IBS, near-identical and interval-boundary guides.
+
+
+```{r}
+fig <- plotting_df %>%
+  ggplot(
+    aes(
+      x = window_start_mb,
+      y = variations,
+      group = query,
+      colour = query
+    )
+  ) +
+  geom_point() +
+  geom_line() +
+  
+  ## add vertical lines on yr7 boundaries
+  
+  ## chinese spring 683,688
+  ##landmark 681 684
+  ## Lancer 571, 575
+  geom_vline(
+  xintercept = c(683, 688),
+  linetype = "dashed",
+  colour = "#1BA13D",
+  linewidth = 0.8) +
+
+  facet_wrap(
+    ~ reference,
+    scales = "free_x",
+    nrow = 1
+  ) +
+
+  # Tick every 50 kb and label every fifth tick
+  #scale_x_continuous(
+    #breaks = x_breaks,
+    #labels = x_labels) 
+  
+  scale_x_continuous(
+    breaks = scales::breaks_width(0.10),
+    labels = scales::label_number(accuracy = 0.01,decimal.mark = ".")) +
+
+  # Square-root transformation with your original breaks
+   #scale_y_continuous(breaks = c(0,10,20,30,40,50,100,150,300,450,600,750)) +
+   scale_y_continuous(limits = c(0, NA),breaks = scales::breaks_width(40),
+  expand = expansion(mult = c(0, 0.05))) +
+
+  ####### Change colors accordingly here ¡¡¡¡¡
+  scale_color_manual(
+    values = cad_that_cord_spark_cols
+  ) +
+
+  # Threshold lines
+  geom_hline(
+    yintercept = 30,
+    linetype = "dashed",
+    colour = "red"
+  ) +
+  geom_hline(
+    yintercept = 120,
+    linetype = "dashed",
+    colour = "blue"
+  ) +
+
+  labs(
+    x = "Position on Chr2B (Mb)",
+    y = "Raw variation counts ",
+    colour = "Accession"
+  ) +
+
+  guides(
+    colour = guide_legend(ncol = 1)
+  ) +
+
+  theme(
+    plot.title = element_text(
+      size = 24,
+      face = "bold"
+    ),
+    axis.text.x = element_text(
+      size = 12,
+      angle = 90,
+      vjust = 0.5,
+      hjust = 1
+    ),
+    axis.title.x = element_text(size = 24),
+    axis.text.y = element_text(size = 16),
+    axis.title.y = element_text(size = 24),
+    strip.text = element_text(size = 24, face = "bold"),
+    legend.title = element_text(size = 24),
+    legend.text = element_text(size = 20)
+  )
+
+print(fig)
+
+#CS_2B_linePlt_cadThat+Par+Cor+Spark.pdf
+#CS_2B_linePlt_cadThat+Prp+Sport+Traf.pdf
+#CS_2B_linePlt_cadThat+Par.pdf
+#Lndk_2B_linePlt_cadThat+Prp+Sport+Traf+Mace+Stanley.pdf
+
+
+## save plot as high resolution pdf
+ggsave(
+  filename = paste0(out_dir,results,"/CS_2B_linePlt_cadThat+Cor+Spark.pdf.pdf"),
+  plot = fig,
+  device = cairo_pdf,
+  width = 32,
+  height = 10,
+  units = "in",
+  dpi = 600,
+  bg = "white")
+
+
+```
+
+# 4. Session information
+
+Record the packages and versions used for the analysis.
+
+```{r}
+devtools::session_info()
+```
