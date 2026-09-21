@@ -1,0 +1,1569 @@
+---
+title: "F5RIL Phenotype Data Analysis"
+author: "Bernice-N-Waweru"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Defining working directories and files
+
+
+```{r setUp}
+setwd("~/Documents/2022/IBSpy_Targets/2024-12-05_5B_Yellow_Rust/2025-06-20_ParagonxWATDE_population")
+
+```
+
+## Load libraries
+
+HTML Cplor codes for plotting : https://www.computerhope.com/htmcolor.htm
+
+```{r libraries}
+
+library(tidyverse)
+library(corrplot)
+library(magrittr)
+```
+
+## Import the data
+
+```{r}
+#dfFull <- read_tsv("2026_March_07_PxW308_F5_RIL_PhenoDatFull.tsv")
+dfFull <- read_tsv("~/Documents/2022/IBSpy_Targets/2024-12-05_5B_Yellow_Rust/2025-06-20_ParagonxWATDE_population/2026_Sep_03_PxW308_F5_RIL_PhenoDatFull.txt")
+
+df <- dfFull %>% select(c("PlantID", "Rep", "Tray", "Block", "Plant", "RawScore", "RankScore", "Response"))
+```
+
+
+```{r}
+df$Response <- factor(df$Response, levels=c("R","MR","MS","S"))
+df$RankScore <- as.numeric(df$RankScore)
+```
+
+Save the dataframe for sharing
+
+```{r}
+write_tsv(df, file = "2026_Sep_07_PxW308_F5_RIL_PhenoDatClean.tsv")
+```
+
+```{r}
+glimpse(df)
+summary(df)
+
+```
+
+
+Plot distribution from R to S
+
+```{r}
+
+## Using Ranks Score
+  ## 
+  ggplot(df, aes(x = RankScore)) +
+  geom_histogram(
+    binwidth = 1,
+    boundary = 0.5,
+    fill = "steelblue",
+    color = "white"
+  ) +
+  scale_x_continuous(
+    breaks = 1:10,
+    limits = c(0.5, 10.5)
+  ) +
+  theme_bw() +
+    facet_wrap(~Rep) +
+  labs(
+    x = "Disease score (1 = Resistant → 10 = Susceptible)",
+    y = "Number of plants",
+    title = "Distribution of disease scores"
+  )
+  
+  ## Using the responses
+
+ggplot(df, aes(Response)) +
+  geom_bar(fill="tomato") +
+  theme_bw() +
+  labs(title="Resistance class distribution")
+```
+
+
+The rows within Response and the RankScore are NA are likely affecting the analysis, remove those before proceeding
+
+```{r}
+
+nrow(df) # 454
+
+dfClean <- df %>%
+  filter(!(is.na(RankScore) & is.na(Response)))
+
+nrow(dfClean) # 403
+dfClean$Rep <- as.factor(dfClean$Rep)
+glimpse(dfClean)
+
+```
+
+```{r}
+  ### samller bins
+  
+  ggplot(
+  dfClean,
+  aes(x = factor(RankScore, levels = 1:10))
+) +
+  geom_bar(
+    fill = "steelblue",
+    width = 0.8
+  ) +
+  scale_x_discrete(drop = FALSE) +
+  theme_bw() +
+    facet_wrap(~Rep)+
+  labs(
+    x = "Disease score (1 = Resistant → 10 = Susceptible)",
+    y = "Number of plants",
+    title = "Distribution of disease scores"
+  )
+```
+
+
+```{r}
+ggplot(dfClean, aes(x= reorder(PlantID, RankScore, mean), y=RankScore)) +
+  geom_boxplot() +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90)) +
+  labs(title="Disease score variation per genotype")
+
+## with colors added
+
+ggplot(dfClean, aes(x = reorder(PlantID, RankScore, mean), y = RankScore)) +
+  geom_boxplot(fill = "lightgrey", outlier.shape = NA) +
+  geom_jitter(aes(color = Response), width = 0.15, height = 0, size = 1.8, alpha = 0.8) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_color_manual(values = c(
+    "R"="#1a9641",
+    "MR"="#a6d96a",
+    "MS"="#fdae61",
+    "S"="#d7191c"
+  )) +
+  labs(
+    title = "Disease score variation per genotype",
+    x = "Genotype",
+    y = "RankScore"
+  )
+```
+
+
+### Effect of Experimental Variables mainly Replicate
+
+
+Replicate
+
+```{r}
+ggplot(dfClean, aes(factor(Rep), RankScore)) +
+  geom_boxplot(fill="lightgreen") +
+  theme_bw()
+
+# with colors and points
+ggplot(dfClean, aes(x = factor(Rep), y = RankScore)) +
+  geom_boxplot(fill = "lightgrey", outlier.shape = NA) +
+  geom_jitter(aes(color = Response), width = 0.15, height = 0, size = 1.8, alpha = 0.8) +
+  theme_bw() +
+  scale_color_manual(values = c(
+    "R" = "#1a9641",
+    "MR" = "#a6d96a",
+    "MS" = "#fdae61",
+    "S" = "#d7191c"
+  )) +
+  labs(
+    x = "Replicate",
+    y = "RankScore",
+    color = "Response"
+  ) +
+stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "black")
+
+#+++++++++++++++++++++++++
+# withour borders
+#+++++++++++++++++++++++++
+#### Presented 
+ggplot(dfClean, aes(x = factor(Rep), y = RankScore)) +
+  geom_boxplot(
+    fill = "#EBF4FA",
+    width = 0.3,
+    color = "#16E2F5",      # keeps whiskers and box outline
+    linewidth = 0.3,
+    outlier.shape = NA
+  ) +
+  geom_jitter(aes(color = Response), width = 0.12, height = 0, size = 1.8, alpha = 0.8) +
+  scale_color_manual(values = c(
+    "R" = "#1a9641",
+    "MR" = "#a6d96a",
+    "MS" = "#fdae61",
+    "S" = "#d7191c"
+  )) +
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),   # remove plot border
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+  title = "Distribution of disease severity scores across replicates",
+  subtitle = "Individual plant scores coloured by resistance class",
+  x = "Replicate",
+  y = "Disease score (Ranked)",
+    color = "Response"
+  ) +
+stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "black")
+
+
+
+```
+
+Still comparing reps but with significance added on th plot
+```{r}
+
+##################
+# with significance added on plot
+#######################
+
+library(dplyr)
+library(ggpubr)
+
+# One mean score per genotype within each replicate
+repMeans <- dfClean %>%
+  filter(!is.na(RankScore)) %>%
+  mutate(Rep = factor(Rep)) %>%
+  group_by(PlantID, Rep) %>%
+  summarise(
+    RankScore = mean(RankScore),
+    .groups = "drop"
+  )
+
+# Retain genotypes present in every replicate
+number_reps <- n_distinct(repMeans$Rep)
+
+complete_genotypes <- repMeans %>%
+  count(PlantID, name = "number_present") %>%
+  filter(number_present == number_reps) %>%
+  pull(PlantID)
+
+repMeansPaired <- repMeans %>%
+  filter(PlantID %in% complete_genotypes) %>%
+  mutate(Rep = droplevels(Rep)) %>%
+  arrange(PlantID, Rep)
+
+# Generate all pairwise replicate comparisons
+rep_comparisons <- combn(
+  levels(repMeansPaired$Rep),
+  2,
+  simplify = FALSE
+)
+
+```
+
+With the mean added to the legend
+
+```{r}
+repsComp <- ggplot(dfClean, aes(x = Rep, y = RankScore)) +
+  
+  geom_boxplot(
+    fill = "#EBF4FA",
+    width = 0.3,
+    color = "#16E2F5",
+    linewidth = 0.3,
+    outlier.shape = NA
+  ) +
+  
+  # Individual observations
+  geom_jitter(
+    aes(color = Response),
+    width = 0.12,
+    height = 0,
+    size = 1.8,
+    alpha = 0.8
+  ) +
+  
+  # Mean of the genotype means within each replicate
+  stat_summary(
+    data = repMeansPaired,
+    aes(
+      x = Rep,
+      y = RankScore,
+      shape = "Mean"
+    ),
+    inherit.aes = FALSE,
+    fun = mean,
+    geom = "point",
+    size = 3,
+    fill = "black",
+    color = "black"
+  ) +
+  
+  # Paired Wilcoxon comparisons
+  stat_compare_means(
+    data = repMeansPaired,
+    aes(x = Rep, y = RankScore),
+    inherit.aes = FALSE,
+    comparisons = rep_comparisons,
+    method = "wilcox.test",
+    paired = TRUE,
+    label = "p.signif",
+    hide.ns = FALSE,
+    tip.length = 0.01,
+    bracket.size = 0.3,
+    step.increase = 0.08
+  ) +
+  
+  # Disease-response colours
+  scale_color_manual(
+    name = "Response",
+    values = c(
+      "R"  = "#1a9641",
+      "MR" = "#a6d96a",
+      "MS" = "#fdae61",
+      "S"  = "#d7191c"
+    )
+  ) +
+  
+  # Black diamond legend
+  scale_shape_manual(
+    name = " ",
+    values = c("Mean" = 23)
+  ) +
+  
+  # Add space above the plot for significance brackets
+  scale_y_continuous(
+    expand = expansion(mult = c(0.05, 0.25))
+  ) +
+  
+  guides(
+    color = guide_legend(order = 1),
+    shape = guide_legend(
+      order = 2,
+      override.aes = list(
+        fill = "black",
+        color = "black",
+        size = 3
+      )
+    )
+  ) +
+  
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "right"
+  ) +
+  
+  labs(
+    title = "Distribution of disease severity scores across replicates",
+    subtitle = "Individual plant scores coloured by resistance class",
+    x = "Replicate",
+    y = "Disease score (ranked)"
+  )
+
+# Display plot
+
+repsComp
+
+## save to pdf
+
+ggsave(
+  filename = "DiseaseScoresAcrossReplicates.pdf",
+  plot = repsComp,
+  device = grDevices::cairo_pdf,
+  width = 8,
+  height = 6,
+  units = "in",
+  bg = "white"
+)
+
+```
+
+### check genotype means
+
+```{r}
+geno_means <- dfClean %>%
+  group_by(PlantID) %>%
+  summarise(mean_score = mean(RankScore, na.rm=TRUE)) %>%
+  arrange(mean_score)
+```
+
+
+By colour
+
+```{r}
+ggplot(df, aes(RankScore, fill=Response)) +
+  geom_histogram(binwidth=1) +
+  scale_fill_manual(values=c(
+    "R"="#1a9641",
+    "MR"="#a6d96a",
+    "MS"="#fdae61",
+    "S"="#d7191c"
+  )) +
+  theme_bw() +
+  labs(title="Disease resistance distribution")
+```
+
+
+With the disease response value, 
+
+```{r}
+library(dplyr)
+
+geno_means <- df %>%
+  filter(!is.na(RankScore)) %>%
+  group_by(PlantID) %>%
+  summarise(
+    mean_score = mean(RankScore, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Response = case_when(
+      mean_score >= 1 & mean_score <= 2 ~ "R",
+      mean_score > 2 & mean_score <= 6 ~ "Intermediate",
+      mean_score > 6 ~ "S"
+    )
+  ) %>%
+  arrange(mean_score)
+```
+
+
+```{r}
+table(geno_means$Response)
+```
+
+Test chi-square goodness of fit to genetic ratios 1:2:1 and 15:2:15 (F2/3 and at F5) for a single gene segregating
+
+```{r}
+obsCombd <- c(R =18, Seg = 30, S =28)
+
+chisq.test(obsCombd, p = c(1,2,1)/4)
+
+chisq.test(obsCombd, p = c(15,2,15)/32)
+
+```
+
+```{r, engine='asis'}
+chisq.test(obsCombd, p = c(1,2,1)/4)
+
+	Chi-squared test for given probabilities
+
+data:  obsCombd
+X-squared = 6, df = 2, p-value = 0.04979
+
+##########
+
+chisq.test(obsCombd, p = c(15,2,15)/32)
+
+	Chi-squared test for given probabilities
+
+data:  obsCombd
+X-squared = 144.58, df = 2, p-value < 2.2e-16
+
+```
+
+
+```{r}
+ggplot(geno_means,
+       aes(reorder(PlantID, mean_score), mean_score, fill = Response)) +
+  geom_col(color="black") +
+  coord_flip() +
+  theme_bw() +
+  scale_fill_manual(values = c(
+    "R" = "#1a9641",
+    "Intermediate" = "#fdae61",
+    "S" = "#d7191c"
+  )) +
+  labs(
+    x = "Genotype",
+    y = "Mean disease score",
+    fill = "Response"
+  )
+```
+
+Making it better,
+
+```{r}
+ggplot(geno_means,
+       aes(reorder(PlantID, mean_score), mean_score, fill = Response)) +
+  geom_col(width = 0.8) +
+  coord_flip() +
+  theme_bw() +
+  scale_y_continuous(breaks = c(0,2,4,6,8,10), limits = c(0,10)) +
+  scale_fill_manual(values = c(
+    "R" = "#1a9641",
+    "Intermediate" = "#fdae61",
+    "S" = "#d7191c"
+  )) +
+  labs(
+    x = "Genotype",
+    y = "Mean disease score",
+    fill = "Response"
+  ) +
+  theme(
+  panel.grid.major.y = element_blank()
+)
+```
+
+```{r}
+ggplot(geno_means,
+       aes(reorder(PlantID, mean_score), mean_score, fill = Response)) +
+  geom_col(width = 0.8) +
+    coord_flip() +
+  geom_hline(yintercept = c(2,6), linetype = "dashed", color = "grey30") +
+  theme_bw() +
+  scale_y_continuous(breaks = c(0,2,4,6,8,10), limits = c(0,10)) +
+  scale_fill_manual(values = c(
+    "R" = "#1a9641",
+    "Intermediate" = "#fdae61",
+    "S" = "#d7191c"
+  )) +
+  theme(
+    axis.text.y = element_text(size = 7),   # smaller genotype labels
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(
+    x = "Genotype",
+    y = "Mean disease score (0 = Resistant → 10 = Susceptible)",
+    fill = "Response"
+  )
+```
+
+Presented 
+```{r}
+ggplot(geno_means,
+       aes(reorder(PlantID, mean_score), mean_score, fill = Response)) +
+
+  # resistance zones
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 0, ymax = 2,
+           fill = "#1a9641", alpha = 0.08) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 2, ymax = 6,
+           fill = "#fdae61", alpha = 0.08) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 6, ymax = 10,
+           fill = "#d7191c", alpha = 0.08) +
+
+  geom_col(width = 0.8) +
+  geom_hline(yintercept = c(2,6), linetype = "dashed", color = "grey40") +
+
+  coord_flip() +
+  theme_bw() +
+
+  scale_y_continuous(
+    breaks = c(0,2,4,6,8,10),
+    limits = c(0,10)
+  ) +
+
+  scale_fill_manual(values = c(
+    "R" = "#1a9641",
+    "Intermediate" = "#fdae61",
+    "S" = "#d7191c"
+  )) +
+
+  theme(
+    axis.text.y = element_text(size = 7),
+    panel.grid.major.y = element_blank()
+  ) +
+
+  labs(
+    title = "Ranking of wheat genotypes by mean disease severity score",
+    subtitle = "Background shading indicates resistance classification thresholds",
+    x = "Genotype",
+    y = "Mean disease score",
+    fill = "Response"
+  )
+```
+
+
+### Generating boxplots of each RIL with the points of scores coloreed by reponse type
+
+```{r}
+ggplot(dfClean, aes(x = reorder(PlantID, RankScore, mean), y = RankScore)) +
+  geom_boxplot(fill = "lightgrey", outlier.shape = NA) +
+  geom_jitter(aes(color = Response), width = 0.15, height = 0, size = 1, alpha = 0.8) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_color_manual(values = c(
+    "R"="#1a9641",
+    "MR"="#a6d96a",
+    "MS"="#fdae61",
+    "S"="#d7191c"
+  )) +
+  labs(
+    title = "Disease score variation per genotype",
+    x = "Genotype",
+    y = "RankScore"
+  )
+```
+
+ 
+```{r}
+
+ggplot(dfClean, aes(
+  x = reorder(PlantID, RankScore, mean),
+  y = RankScore
+)) +
+  geom_boxplot(
+    fill = "lightgrey",
+    width = 1,
+    outlier.shape = NA
+  ) +
+  geom_jitter(
+    aes(color = Response),
+    width = 0.15,
+    height = 0,
+    size = 0.8,
+    alpha = 0.8
+  ) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_color_manual(values = c(
+    "R"  = "#1a9641",
+    "MR" = "#a6d96a",
+    "MS" = "#fdae61",
+    "S"  = "#d7191c"
+  )) +
+  labs(
+    title = "Disease score variation per genotype",
+    x = "Genotype",
+    y = "Rank score"
+  )
+```
+ 
+ 
+ Flipping the coordinate and adding background shading image in thesis
+```{r}
+p <- ggplot(dfClean, aes(x = reorder(PlantID, RankScore, mean),y = RankScore)) +
+  # Resistance zones
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 0, ymax = 2,
+    fill = "#1a9641", alpha = 0.08
+  ) +
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 2, ymax = 6,
+    fill = "#fdae61", alpha = 0.08
+  ) +
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 6, ymax = 10,
+    fill = "#d7191c", alpha = 0.08
+  ) +
+  geom_boxplot(
+    fill = "lightgrey",
+    width = 1,
+    outlier.shape = NA
+  ) +
+  geom_jitter(
+    aes(color = Response),
+    width = 0.15,
+    height = 0,
+    size = 0.8,
+    alpha = 0.8
+  ) +
+  scale_color_manual(values = c(
+    "R"  = "#1a9641",
+    "MR" = "#a6d96a",
+    "MS" = "#fdae61",
+    "S"  = "#d7191c"
+  )) +
+  scale_y_continuous(
+    limits = c(0, 10),
+    breaks = 0:10
+  ) +
+  coord_flip() +
+  theme_bw() +
+  theme(
+  axis.text.y = element_text(size = 6),
+  axis.text.x = element_text(size = 9)
+)+
+  labs(
+    title = "Disease score variation per genotype",
+    x = "Genotype",
+    y = "Rank score",
+    color = "Disease response"
+  )
+
+p
+
+```
+ 
+ Save to pdf
+ 
+```{r}
+ggsave(
+  filename = "Disease_score_variation_per_genotype.pdf",
+  plot = p,
+  device = cairo_pdf,
+  width = 11,
+  height = 10,
+  units = "in",
+  bg = "white"
+)
+```
+ 
+ 
+### Rather than plotting the mean combined for rep 1 na rep 2, we check by rep independently
+ 
+```{r}
+geno_means <- dfClean %>%
+  group_by(Rep, PlantID, Response) %>%
+  summarise(
+    mean_score = mean(RankScore, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(Rep, mean_score)
+```
+ 
+ # check distribution of groups per rep
+ 
+```{r}
+table(geno_means$Rep, geno_means$Response)
+```
+ 
+ 
+
+```{r}
+library(ggplot2)
+#install.packages("tidytext")
+library(tidytext)
+
+## reordering the means within each rep not th whole dataset
+
+ggplot(geno_means,
+       aes(
+         x = reorder_within(PlantID, mean_score, Rep),
+         y = mean_score,
+         fill = Response
+       )) +
+
+  # resistance zones
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 0, ymax = 2,
+    fill = "#1a9641", alpha = 0.08
+  ) +
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 2, ymax = 6,
+    fill = "#fdae61", alpha = 0.08
+  ) +
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 6, ymax = 10,
+    fill = "#d7191c", alpha = 0.08
+  ) +
+
+  geom_col(width = 0.8) +
+
+  geom_hline(
+    yintercept = c(2, 6),
+    linetype = "dashed",
+    color = "grey40"
+  ) +
+
+  # separate panel for each replicate
+  facet_wrap(
+    ~ Rep,
+    scales = "free"
+  ) +
+
+  # removes Rep suffix added by reorder_within()
+  scale_x_reordered() +
+
+  coord_flip() +
+  theme_bw() +
+
+  scale_y_continuous(
+    breaks = c(0, 2, 4, 6, 8, 10),
+    limits = c(0, 10)
+  ) +
+
+  scale_fill_manual(
+    values = c(
+      "R" = "#1a9641",
+      "Intermediate" = "#fdae61",
+      "S" = "#d7191c"
+    )
+  ) +
+
+  theme(
+    axis.text.y = element_text(size = 7),
+    panel.grid.major.y = element_blank()
+  ) +
+
+  labs(
+    title = "Ranking of wheat genotypes by mean disease severity score",
+    subtitle = "Genotypes ranked independently within each experimental replicate",
+    x = "Genotype",
+    y = "Mean disease score",
+    fill = "Response"
+  )
+```
+ 
+ 
+ ### Boxplots for each rep
+ 
+```{r}
+library(ggplot2)
+library(tidytext)
+
+p <- ggplot(
+  dfClean,
+  aes(
+    x = reorder_within(PlantID, RankScore, Rep, fun = mean),
+    y = RankScore
+  )
+) +
+
+  # Resistance zones
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 0, ymax = 2,
+    fill = "#1a9641", alpha = 0.08
+  ) +
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 2, ymax = 6,
+    fill = "#fdae61", alpha = 0.08
+  ) +
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 6, ymax = 10,
+    fill = "#d7191c", alpha = 0.08
+  ) +
+
+  # Boxplots
+  geom_boxplot(
+    fill = "lightgrey",
+    width = 1,
+    outlier.shape = NA
+  ) +
+
+  # Individual plants / observations
+  geom_jitter(
+    aes(color = Response),
+    width = 0.15,
+    height = 0,
+    size = 0.8,
+    alpha = 0.8
+  ) +
+
+  # Separate experimental replicates
+  facet_wrap(
+    ~ Rep,
+    scales = "free"
+  ) +
+
+  # Remove suffix added by reorder_within()
+  scale_x_reordered() +
+
+  scale_color_manual(
+    values = c(
+      "R"  = "#1a9641",
+      "MR" = "#a6d96a",
+      "MS" = "#fdae61",
+      "S"  = "#d7191c"
+    )
+  ) +
+
+  scale_y_continuous(
+    limits = c(0, 10),
+    breaks = 0:10
+  ) +
+
+  coord_flip() +
+
+  theme_bw() +
+
+  theme(
+    axis.text.y = element_text(size = 6),
+    axis.text.x = element_text(size = 9)
+  ) +
+
+  labs(
+    title = "Disease score variation per genotype",
+    subtitle = "Genotypes ranked independently within each experimental replicate",
+    x = "Genotype",
+    y = "Rank score",
+    color = "Disease response"
+  )
+
+p
+```
+ 
+ But I want to count the distribution based on the mean of each RIL not individual plants
+ 
+```{r}
+geno_meansPlantID <- dfClean %>%
+  group_by(Rep, PlantID) %>%
+  summarise(
+    mean_score = mean(RankScore, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    MeanResponse = case_when(
+      mean_score <= 2 ~ "R",
+      mean_score > 2 & mean_score <= 6 ~ "Intermediate",
+      mean_score > 6 ~ "S"
+    )
+  )
+```
+ 
+```{r}
+table(geno_meansPlantID$Rep, geno_meansPlantID$MeanResponse)
+```
+ 
+  # chi-square or reps
+ 
+```{r}
+
+obsR1 <- c(R =24, Seg = 14, S =34)
+obsR2 <- c(R =17, Seg = 37, S =21)
+
+## Rep 1
+chisq.test(obsR1, p = c(1,2,1)/4)
+
+chisq.test(obsR1, p = c(15,2,15)/32)
+
+## rep 2
+
+chisq.test(obsR2, p = c(1,2,1)/4)
+
+chisq.test(obsR2, p = c(15,2,15)/32)
+
+
+```
+ 
+ Results look like below
+```{r, engine='asis'}
+
+> table(geno_meansPlantID$Rep, geno_meansPlantID$MeanResponse)
+   
+    Intermediate  R  S
+  1           14 24 34
+  2           37 17 21
+
+
+###########
+
+> chisq.test(obsR1, p = c(1,2,1)/4)
+
+	Chi-squared test for given probabilities
+
+data:  obsR1
+X-squared = 29.667, df = 2, p-value = 3.614e-07
+
+> chisq.test(obsR1, p = c(15,2,15)/32)
+
+	Chi-squared test for given probabilities
+
+data:  obsR1
+X-squared = 22.874, df = 2, p-value = 1.079e-05
+
+
+##########
+
+> chisq.test(obsR2, p = c(1,2,1)/4)
+
+	Chi-squared test for given probabilities
+
+data:  obsR2
+X-squared = 0.44, df = 2, p-value = 0.8025
+
+> chisq.test(obsR2, p = c(15,2,15)/32)
+
+	Chi-squared test for given probabilities
+
+data:  obsR2
+X-squared = 237.82, df = 2, p-value < 2.2e-16
+
+```
+ 
+
+Comapring means between reps
+
+```{r}
+geno_meansPlantID %>%
+  group_by(Rep) %>%
+  summarise(
+    n_RILs = n(),
+    mean_score = mean(mean_score, na.rm = TRUE),
+    sd_score = sd(mean_score, na.rm = TRUE),
+    median_score = median(mean_score, na.rm = TRUE),
+    IQR = IQR(mean_score, na.rm = TRUE)
+  )
+```
+
+```{r}
+paired_means <- geno_meansPlantID %>%
+  select(PlantID, Rep, mean_score) %>%
+  pivot_wider(
+    names_from = Rep,
+    values_from = mean_score,
+    names_prefix = "Rep"
+  ) %>%
+  drop_na(Rep1, Rep2)
+
+head(paired_means)
+nrow(paired_means)
+```
+
+
+```{r}
+wilcox.test(
+  paired_means$Rep1,
+  paired_means$Rep2,
+  paired = TRUE,
+  exact = FALSE
+)
+```
+ 
+
+Now using the individual RIL mean as for the colour of the boxplots 
+
+```{r}
+library(ggplot2)
+library(tidytext)
+
+# Calculate genotype mean within each replicate
+# and classify the genotype based on that mean
+geno_means_v2 <- dfClean %>%
+  group_by(Rep, PlantID) %>%
+  summarise(
+    mean_score = mean(RankScore, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    MeanResponse = case_when(
+      mean_score <= 2 ~ "R",
+      mean_score > 2 & mean_score <= 6 ~ "Intermediate",
+      mean_score > 6 ~ "S"
+    )
+  )
+
+# Plot
+ggplot(
+  geno_means_v2,
+  aes(
+    x = reorder_within(PlantID, mean_score, Rep),
+    y = mean_score,
+    fill = MeanResponse
+  )
+) +
+
+  # Resistance zones
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 0, ymax = 2,
+    fill = "#1a9641", alpha = 0.08
+  ) +
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 2, ymax = 6,
+    fill = "#fdae61", alpha = 0.08
+  ) +
+  annotate(
+    "rect",
+    xmin = -Inf, xmax = Inf,
+    ymin = 6, ymax = 10,
+    fill = "#d7191c", alpha = 0.08
+  ) +
+
+  geom_col(width = 0.8) +
+
+  geom_hline(
+    yintercept = c(2, 6),
+    linetype = "dashed",
+    color = "grey40"
+  ) +
+
+  # Rank independently within each replicate
+  facet_wrap(
+    ~ Rep,
+    scales = "free"
+  ) +
+
+  scale_x_reordered() +
+
+  scale_y_continuous(
+    breaks = c(0, 2, 4, 6, 8, 10),
+    limits = c(0, 10)
+  ) +
+
+  scale_fill_manual(
+    values = c(
+      "R" = "#1a9641",
+      "Intermediate" = "#fdae61",
+      "S" = "#d7191c"
+    )
+  ) +
+
+  coord_flip() +
+  theme_bw() +
+
+  theme(
+    axis.text.y = element_text(size = 7),
+    panel.grid.major.y = element_blank()
+  ) +
+
+  labs(
+    title = "Ranking of wheat genotypes by mean disease severity score",
+    subtitle = "Response classification based on genotype mean within each replicate",
+    x = "Genotype",
+    y = "Mean disease score",
+    fill = "Genotype response"
+  )
+```
+
+Rep two appears to have a better distribution of plants than rep 1, lets check how many plants were in each ril for each rep
+
+```{r}
+plant_counts <- dfClean %>%
+  count(Rep, PlantID, name = "n_plants")
+```
+
+
+```{r}
+plant_counts %>%
+  group_by(Rep) %>%
+  summarise(
+    n_genotypes = n(),
+    mean_plants = mean(n_plants),
+    median_plants = median(n_plants),
+    min_plants = min(n_plants),
+    max_plants = max(n_plants),
+    one_plant = sum(n_plants == 1),
+    two_or_less = sum(n_plants <= 2),
+    pct_one_plant = 100 * mean(n_plants == 1),
+    pct_two_or_less = 100 * mean(n_plants <= 2)
+  )
+```
+
+Plot 
+
+```{r}
+ggplot(plant_counts, aes(x = n_plants)) +
+  geom_bar() +
+  facet_wrap(~ Rep) +
+  theme_bw() +
+  scale_x_continuous(breaks = 1:max(plant_counts$n_plants)) +
+  labs(
+    x = "Number of plants scored per genotype",
+    y = "Number of RILs",
+    title = "Number of plants contributing to each genotype mean"
+  )
+```
+
+Compare RILs between reps
+
+```{r}
+library(tidyr)
+
+plant_counts_wide <- plant_counts %>%
+  pivot_wider(
+    names_from = Rep,
+    values_from = n_plants,
+    names_prefix = "Rep"
+  )
+
+plant_counts_wide
+```
+
+
+Test whether low plant number corrsponds to unstable diseasae means
+
+```{r}
+
+rep_means <- dfClean %>%
+  group_by(Rep, PlantID) %>%
+  summarise(
+    n_plants = n(),
+    mean_score = mean(RankScore, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+Put rep 1 and 2 sisde by side
+
+```{r}
+rep_compare <- rep_means %>%
+  pivot_wider(
+    names_from = Rep,
+    values_from = c(n_plants, mean_score),
+    names_glue = "{.value}_Rep{Rep}"
+  ) %>%
+  mutate(
+    score_difference = abs(mean_score_Rep1 - mean_score_Rep2)
+  )
+```
+
+
+And plot to see
+
+```{r}
+ggplot(
+  rep_compare,
+  aes(x = n_plants_Rep1, y = score_difference)
+) +
+  geom_jitter(width = 0.1, height = 0, alpha = 0.7) +
+  theme_bw() +
+  scale_x_continuous(breaks = 1:max(rep_compare$n_plants_Rep1, na.rm = TRUE)) +
+  labs(
+    x = "Number of plants scored in Rep 1",
+    y = "Absolute difference between Rep 1 and Rep 2 mean score",
+    title = "Effect of Rep 1 plant number on phenotype repeatability"
+  )
+```
+
+ A spaghetti plot of means of RILs in Rep 1 and Rep 2
+ 
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Keep only RILs represented in both replicates
+plot_data <- geno_means_v2 %>%
+  group_by(PlantID) %>%
+  filter(n_distinct(Rep) == 2) %>%
+  ungroup() %>%
+  mutate(
+    Rep = factor(Rep, levels = c(1, 2))
+  )
+
+ggplot(
+  plot_data,
+  aes(
+    x = Rep,
+    y = mean_score,
+    group = PlantID
+  )
+) +
+
+  # Connect the same RIL between replicates
+  geom_line(
+    color = "grey60",
+    linewidth = 0.5,
+    alpha = 0.7
+  ) +
+
+  # Colour each replicate mean by its mean-response classification
+  geom_point(
+    aes(color = MeanResponse),
+    size = 2.5
+  ) +
+
+  # Disease response thresholds
+  geom_hline(
+    yintercept = c(2, 6),
+    linetype = "dashed",
+    color = "grey40"
+  ) +
+
+  scale_color_manual(
+    values = c(
+      "R" = "#1a9641",
+      "Intermediate" = "#fdae61",
+      "S" = "#d7191c"
+    )
+  ) +
+
+  scale_y_continuous(
+    limits = c(0, 10),
+    breaks = 0:10
+  ) +
+
+  theme_bw() +
+
+  labs(
+    title = "Comparison of RIL mean disease scores between replicates",
+    x = "Experimental replicate",
+    y = "Mean disease score",
+    color = "Mean response"
+  ) +
+
+  theme(
+    panel.grid.minor = element_blank()
+  )
+```
+ 
+ Adding infor for where the number of plant cotributing to mean we can see
+ 
+```{r}
+geno_means_v3 <- dfClean %>%
+  group_by(Rep, PlantID) %>%
+  summarise(
+    n_plants = sum(!is.na(RankScore)),
+    mean_score = mean(RankScore, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    MeanResponse = case_when(
+      mean_score <= 2 ~ "R",
+      mean_score > 2 & mean_score <= 6 ~ "Intermediate",
+      mean_score > 6 ~ "S"
+    )
+  )
+```
+ 
+```{r}
+ggplot(
+  geno_means_v3,
+  aes(
+    x = factor(Rep),
+    y = mean_score,
+    group = PlantID
+  )
+) +
+  geom_line(
+    color = "grey65",
+    linewidth = 0.5,
+    alpha = 0.7
+  ) +
+  geom_point(
+    aes(
+      color = MeanResponse,
+      size = n_plants
+    ),
+    alpha = 0.85
+  ) +
+
+  geom_hline(
+    yintercept = c(2, 6),
+    linetype = "dashed",
+    color = "grey40"
+  ) +
+
+  scale_color_manual(
+    values = c(
+      "R" = "#1a9641",
+      "Intermediate" = "#fdae61",
+      "S" = "#d7191c"
+    )
+  ) +
+
+  scale_y_continuous(
+    limits = c(0, 10),
+    breaks = 0:10
+  ) +
+
+  theme_bw() +
+
+  labs(
+    title = "RIL disease scores across experimental replicates",
+    subtitle = "Point size indicates the number of plants contributing to each genotype mean",
+    x = "Replicate",
+    y = "Mean disease score",
+    color = "Mean response",
+    size = "Plants scored"
+  )
+```
+ 
+ with diff shapes rather than sizes
+ 
+```{r}
+geno_means_v3 <- geno_means_v3 %>%
+  mutate(
+    n_plants = factor(n_plants)
+  )
+
+ggplot(
+  geno_means_v3,
+  aes(
+    x = factor(Rep),
+    y = mean_score,
+    group = PlantID
+  )
+) +
+  geom_line(
+    color = "grey65",
+    linewidth = 0.5,
+    alpha = 0.7
+  ) +
+
+  geom_point(
+    aes(
+      color = MeanResponse,
+      shape = n_plants
+    ),
+    size = 3,
+    alpha = 0.9
+  ) +
+
+  geom_hline(
+    yintercept = c(2, 6),
+    linetype = "dashed",
+    color = "grey40"
+  ) +
+
+  scale_color_manual(
+    values = c(
+      "R" = "#1a9641",
+      "Intermediate" = "#fdae61",
+      "S" = "#d7191c"
+    )
+  ) +
+
+  scale_shape_manual(
+    values = c(
+      "1" = 16,  # circle
+      "2" = 17,  # triangle
+      "3" = 15,  # square
+      "4" = 18,  # diamond
+      "5" = 8,   # star
+      "6" = 3    # plus
+    )
+  ) +
+
+  scale_y_continuous(
+    limits = c(0, 10),
+    breaks = 0:10
+  ) +
+
+  theme_bw() +
+
+  labs(
+    title = "RIL disease scores across experimental replicates",
+    subtitle = "Lines connect genotype means between Rep 1 and Rep 2",
+    x = "Replicate",
+    y = "Mean disease score",
+    color = "Mean response",
+    shape = "Plants scored"
+  ) +
+
+  theme(
+    panel.grid.minor = element_blank()
+  )
+```
+ 
+ Spacing them out for better visuals,
+ 
+```{r}
+
+library(dplyr)
+library(ggplot2)
+
+# Give each RIL a small, consistent horizontal offset
+plot_data <- geno_means_v3 %>%
+  mutate(
+    PlantNumber = factor(
+      n_plants,
+      levels = 1:5
+    )
+  ) %>%
+  group_by(PlantID) %>%
+  mutate(
+    ril_order = cur_group_id()
+  ) %>%
+  ungroup() %>%
+  mutate(
+    # small spread around each replicate position
+    offset = scales::rescale(
+      ril_order,
+      to = c(-0.12, 0.12)
+    ),
+    x_position = as.numeric(factor(Rep)) + offset
+  )
+```
+
+
+```{r}
+ggplot(
+  plot_data,
+  aes(
+    x = x_position,
+    y = mean_score,
+    group = PlantID
+  )
+) +
+
+  # Connect Rep 1 and Rep 2 for each RIL
+  geom_line(
+    color = "grey65",
+    linewidth = 0.4,
+    alpha = 0.6
+  ) +
+
+  # Mean score for each RIL
+  geom_point(
+    aes(
+      color = MeanResponse,
+      shape = PlantNumber
+    ),
+    size = 2,
+    alpha = 0.9
+  ) +
+
+  # Disease-response thresholds
+  geom_hline(
+    yintercept = c(2, 6),
+    linetype = "dashed",
+    color = "grey40"
+  ) +
+
+  scale_x_continuous(
+    breaks = c(1, 2),
+    labels = c("Rep 1", "Rep 2"),
+    limits = c(0.7, 2.3)
+  ) +
+
+  scale_y_continuous(
+    limits = c(0, 10),
+    breaks = 0:10
+  ) +
+
+  scale_color_manual(
+    values = c(
+      "R" = "#1a9641",
+      "Intermediate" = "#fdae61",
+      "S" = "#d7191c"
+    )
+  ) +
+
+  scale_shape_manual(
+    values = c(
+      "1" = 16,  # circle
+      "2" = 17,  # triangle
+      "3" = 15,  # square
+      "4" = 18,  # diamond
+      "5" = 8    # star
+    )
+  ) +
+
+  theme_bw() +
+
+  theme(
+    panel.grid.minor = element_blank()
+  ) +
+
+  labs(
+    title = "RIL disease scores across experimental replicates",
+    subtitle = "Lines connect genotype means between Rep 1 and Rep 2",
+    x = "Experimental replicate",
+    y = "Mean disease score",
+    color = "Mean response",
+    shape = "Plants scored"
+  )
+```
+ 
+ 
+ Plants with R and S in rep 1/2
+  - 35
+  - 39
+  - 66
+  - 68
