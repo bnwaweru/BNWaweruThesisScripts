@@ -1,0 +1,455 @@
+---
+title: "Plot figures dot plots of NUCmer alignemnts in Chapter 2 "
+author: "Bernice Waweru"
+date: "17/08/2026"
+output: html_document
+---
+
+Set up working directories
+
+```{r}
+setwd("/Users/waweru/Documents/2022/Python_learning/python_learning_with_Burkhard/chr2D_CS_635-650Mb/mummer_out/2023_Nov_R_dot_plots/")
+
+```
+
+Generate dot plot figure of nucmer alignments between chromosomes with the data points colored by percentage similarity,
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(magrittr)
+library(GenomicRanges)
+library(ggplot2)
+library(tidyr)
+library(viridis)
+library(stringr)
+library(gridExtra)
+
+# Import the reusable MUMmer functions from the separate R script.
+source("/Users/waweru/Documents/2022/ThesisWriting/Chapter2/chr2DMummerData+Plots/mummerDotplotFunctions.R")
+
+```
+
+Reusable functions for reading and plotting MUMmer alignments are loaded from `mummer_dotplot_functions.R`.
+
+Read Delta functions and plotting functions (adapted) used are from repository [here:](https://jmonlong.github.io/Hippocamplus/2017/09/19/mummerplots-with-ggplot2/)
+Reads in delta file output from nucmer into R and summarises into dataframe
+
+Adapting this section to alignments am working with, adding information for every ref-quary pair
+
+```{r}
+
+base_dir <- "/Users/waweru/Documents/2022/Python_learning/python_learning_with_Burkhard/chr2D_CS_635-650Mb/mummer_out/"
+
+cut_off <- 99.99
+
+chr <- "2D"
+chrom <- paste0("chr", chr)
+
+# Add one row for each reference-query comparison.
+comparisons <- tibble::tribble(
+  ~variety,       ~query,   ~delta_file,
+  "chinesespring", "julius", "CS_2D_VS_julius_2D.delta",
+  "chinesespring", "arina", "CS_2D_VS_arinaLrFor_2D.delta",
+  "chinesespring", "jagger", "CS_2D_VS_jagger_2D.delta",
+  "chinesespring", "lancer", "CS_2D_VS_lancer_2D.delta",
+  "chinesespring", "landmark", "CS_2D_VS_landmark_2D.delta",
+  "chinesespring", "mace", "CS_2D_VS_mace_2D.delta",
+  "chinesespring", "norin61", "CS_2D_VS_norin61_2D.delta",
+  "chinesespring", "stanley", "CS_2D_VS_stanley_2D.delta",
+  "chinesespring", "symattis", "CS_2D_VS_symattis_2D.delta"
+)
+
+```
+
+Plot the whole chromosome and telomeric region for each reference-query combination.
+
+```{r}
+library(scales) # to add commas to the axes labels
+options(scipen = 999) # to remove exponential numbers in the axes
+date <- Sys.Date() # add to the saved figures for posterity
+
+for (i in seq_len(nrow(comparisons))) {
+  variety <- comparisons$variety[i]
+  query <- comparisons$query[i]
+  ref <- variety
+
+  data_dir_query <- paste0(base_dir, query, "/", comparisons$delta_file[i])
+  plot_dir_WC <- paste0(base_dir, "2026-Aug/wholeChromPLots/")
+  plot_dir_telo <- paste0(base_dir, "2026-Aug/teloIntvlPlots/")
+
+  dir.create(plot_dir_WC,recursive = TRUE,showWarnings = FALSE)
+  dir.create(plot_dir_telo,recursive = TRUE,showWarnings = FALSE)
+
+  # Read alignments of at least 10 kb.
+  #========================================================
+  
+  print(paste0("Reading delta file of ",ref," vs ",query))
+  min_size <- 20000
+  comparison_filt_20kb <- pre_plot_analysis(
+    delta_path = data_dir_query,
+    min_size = min_size
+  )
+  #========================================================
+  #===== Plot the whole chromosome
+  #========================================================
+  
+  print("Plotting whole chromosome dot plot")
+  ref_start <- 0
+
+  tiff(paste0(plot_dir_WC,date,"_dot_plot_",variety,"_2D_VS_",query,"_chromosome_","filt_",min_size,"bp.tiff"), res = 300, width = 9, height = 6, units = "in")
+  filt_data <- comparison_filt_20kb %>% filter(rs >= ref_start) %>% filter(r_length >= min_size)
+  print(
+    filt_data %>% plot_by_perc_id_cap(., cap_lower = 97, cap_upper = 100) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5)) +
+      theme(axis.text.y = element_text(angle = 45, hjust = 1, size = 5)) +
+      scale_y_continuous(breaks = seq(min(filt_data$qs),max(filt_data$qs) ,50000000), labels = scales::comma, name = paste0(query, " chr2D")) +
+      scale_x_continuous(breaks = seq(min(filt_data$rs),max(filt_data$rs) ,50000000), labels = scales::comma, name = paste0(ref, " chr2D")) +
+      ggtitle(label = paste0("Dot plot of ",ref," chr2D against chr2D of ",query), subtitle = paste0("Alignments longer than ", min_size, " bp")) +
+      theme(plot.title = element_text(size = 12, face = "bold.italic"))
+  )
+  dev.off()
+  
+  #========================================================================
+  #========= Plot the telomeric region containing the interval of interest.
+  #=========================================================================
+  print("Plotting dot plot for the telomeric interval")
+  
+  ref_start <- 630000000
+  ref_end <- 651852609 # last position on Chinese Spring chr2D
+
+  ref_start_mb <- round(ref_start / 1e6)
+  ref_end_mb <- round(ref_end / 1e6)
+
+  tiff(paste0(plot_dir_telo,date,"_dot_plot_",variety,"_2D_VS_",query,"_",ref_start_mb,"-",ref_end_mb,"Mb_",min_size,"bp_telo.tiff"), res = 300, width = 9, height = 6, units = "in")
+  filt_data <- comparison_filt_20kb %>% filter(rs >= ref_start) %>% filter(qs >= ref_start) %>% filter(r_length >= min_size)
+  print(
+    filt_data %>% plot_by_perc_id_cap(., cap_lower = 97, cap_upper = 100) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 7)) +
+      theme(axis.text.y = element_text(size = 7)) +
+      scale_y_continuous(breaks = seq(min(filt_data$qs),max(filt_data$qs) ,5000000), labels = scales::comma, name = paste0(query, " chr2D")) +
+      scale_x_continuous(breaks = seq(min(filt_data$rs),max(filt_data$rs) ,5000000), labels = scales::comma, name = paste0(ref, " chr2D")) +
+      ggtitle(label = paste0("Dot plot of ",ref," chr2D against chr2D of ",query), subtitle = paste0("Alignments longer than ", min_size, " bp")) +
+      theme(plot.title = element_text(size = 12, face = "bold.italic"))
+  )
+  dev.off()
+
+
+#========================================================
+#===== annotated telomeric interval =====================
+#===== alignments longer than 20 kb =====================
+
+  print("Plotting annotated dot plot for the telomeric interval")
+  
+# This interval includes the Alcedo block, SNP marker and SSR marker.
+  ref_start <- 633000000
+  ref_end <- 645000000
+  min_size <- 20000
+  
+  ref_start_mb <- round(ref_start / 1e6)
+  ref_end_mb <- round(ref_end / 1e6)
+  
+  ref_label <- ifelse(
+    tolower(ref) == "chinesespring",
+    "Chinese Spring",
+    stringr::str_to_title(ref)
+  )
+  query_label <- ifelse(
+    tolower(query) == "chinesespring",
+    "Chinese Spring",
+    stringr::str_to_title(query)
+  )
+  
+  # Positions of annotations on the Chinese Spring reference.
+  annotation_data <- tibble::tribble(
+    ~position,  ~annotation,
+    634400000,  "Alcedo block boundaries",
+    635000000,  "Alcedo block boundaries",
+    635600441,  "AX-89766862 SNP marker",
+    644277239,  "Xgwm320 SSR marker"
+  )
+  
+  annotation_data$annotation <- factor(
+    annotation_data$annotation,
+    levels = c(
+      "Alcedo block boundaries",
+      "AX-89766862 SNP marker",
+      "Xgwm320 SSR marker"
+    )
+  )
+  
+  annotation_colours <- c(
+    "Alcedo block boundaries" = "#D55E00",
+    "AX-89766862 SNP marker" = "#009E73",
+    "Xgwm320 SSR marker" = "#0072B2"
+  )
+  
+  annotation_linetypes <- c(
+    "Alcedo block boundaries" = "solid",
+    "AX-89766862 SNP marker" = "dashed",
+    "Xgwm320 SSR marker" = "dotdash"
+  )
+  
+  filt_data <- comparison_filt_20kb %>%
+    filter(rs >= ref_start,re <= ref_end,r_length >= min_size )
+  
+  if (nrow(filt_data) == 0) {
+    stop("No alignments passed the interval and minimum-length filters.")
+  }
+  
+  query_start <- min(c(filt_data$qs, filt_data$qe), na.rm = TRUE)
+  query_end <- max(c(filt_data$qs, filt_data$qe), na.rm = TRUE)
+  
+  tiff(
+    paste0(
+      plot_dir_telo, date, "_dot_plot_", variety, "_2D_VS_", query, "_",
+      ref_start_mb, "-", ref_end_mb, "Mb_", min_size,
+      "bp_telo_annotated.tiff"
+    ),
+    res = 300,
+    width = 12,
+    height = 6,
+    units = "in"
+  )
+  
+  annotated_plot <- filt_data %>%
+    plot_by_perc_id_cap(
+      xmin = ref_start - 1,
+      xmax = ref_end + 1,
+      cap_lower = 97,
+      cap_upper = 100
+    ) +
+    geom_vline(
+      data = filter(
+        annotation_data,
+        annotation == "Alcedo block boundaries"
+      ),
+      aes(xintercept = position, linetype = annotation),
+      colour = annotation_colours[["Alcedo block boundaries"]],
+      linewidth = 0.5
+    ) +
+    geom_vline(
+      data = filter(
+        annotation_data,
+        annotation == "AX-89766862 SNP marker"
+      ),
+      aes(xintercept = position, linetype = annotation),
+      colour = annotation_colours[["AX-89766862 SNP marker"]],
+      linewidth = 0.5
+    ) +
+    geom_vline(
+      data = filter(
+        annotation_data,
+        annotation == "Xgwm320 SSR marker"
+      ),
+      aes(xintercept = position, linetype = annotation),
+      colour = annotation_colours[["Xgwm320 SSR marker"]],
+      linewidth = 0.5
+    ) +
+    scale_linetype_manual(
+      name = "Reference annotations",
+      values = annotation_linetypes,
+      guide = guide_legend(
+        override.aes = list(
+          colour = unname(annotation_colours),
+          linewidth = 0.7
+        )
+      )
+    ) +
+    scale_x_continuous(
+      limits = c(ref_start, ref_end),
+      breaks = scales::breaks_pretty(n = 7),
+      labels = scales::label_number(
+        scale = 1e-6,
+        accuracy = 0.1,
+        suffix = " Mb"
+      ),
+      name = paste0(ref_label, " chr2D position")
+    ) +
+    scale_y_continuous(
+      limits = c(query_start, query_end),
+      breaks = scales::breaks_pretty(n = 7),
+      labels = scales::label_number(
+        scale = 1e-6,
+        accuracy = 0.1,
+        suffix = " Mb"
+      ),
+      name = paste0(query_label, " chr2D position")
+    ) +
+    labs(
+      title = paste0(
+        "Chromosome 2D alignment: ", ref_label,
+        " (reference) vs ", query_label, " (query)"
+      ),
+      subtitle = paste0(
+        ref_label, " interval ", ref_start_mb, "-", ref_end_mb,
+        " Mb; alignments >= ", scales::comma(min_size), " bp"
+      ),
+      colour = "Alignment identity (%)",
+      caption = "Vertical lines show block boundaries and marker positions on the reference."
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+      axis.text.y = element_text(size = 7),
+      plot.title = element_text(size = 12, face = "bold.italic"),
+      plot.subtitle = element_text(size = 9),
+      legend.position = "right",
+      legend.box = "vertical"
+    )
+  
+  print(annotated_plot)
+  dev.off()
+}
+```
+
+
+#### Looking at small specific regions, still with CS as the reference 
+
+```{r}
+# Use the Julius comparison for the single-run interval plots below.
+variety <- "chinesespring"
+query <- "julius"
+ref <- variety
+
+data_dir_query <- paste0(base_dir, query, "/", "CS_2D_VS_", query, "_2D.delta")
+plot_dir <- paste0(base_dir, "2026-Aug/", query, "/")
+
+comparison_filt_20kb <- pre_plot_analysis(
+  delta_path = data_dir_query,
+  min_size = 10000
+)
+
+comparison_filt_all <- pre_plot_analysis(
+  delta_path = data_dir_query,
+  min_size = 0
+)
+
+#========================================================
+#===== plot for region with the SNP marker  ======
+#===== alignments longer then 10kb, for a specific region ======
+
+ref_start <- 633000000
+ref_end <- 645000000
+min_size <- 10000
+
+## this values for file name
+ref_start_mb <- round(ref_start / 1e6)
+ref_end_mb   <- round(ref_end / 1e6)
+
+
+tiff(paste0(plot_dir,date,"_dot_plot_",variety,"_2D_VS_",query,"_",ref_start_mb,"-",ref_end_mb,"_",min_size,"_telo_annotated.tiff"), res = 300, width = 9, height = 6, units = "in")
+filt_data <- comparison_filt_20kb %>% filter(rs >= ref_start) %>% filter(re <= ref_end) %>% filter(r_length >= min_size)
+ filt_data %>% plot_by_perc_id_cap(., cap_lower = 97, cap_upper = 100) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    theme(axis.text.x = element_text(size = 7 )) +
+   theme(axis.text.y = element_text(size = 7)) +
+  scale_y_continuous(breaks = seq(min(filt_data$qs),max(filt_data$qs) ,500000), labels = scales::comma, name = paste0(query, " chr2D")) +
+  scale_x_continuous(breaks = seq(min(filt_data$rs),max(filt_data$rs) ,250000), labels = scales::comma, name = paste0(ref, " chr2D")) +
+   #add a vline to the position of the SNP (green),SSR (blue) and Alcedo block on CS (red lines)
+   geom_vline(xintercept = 634400000, colour="red", lwd=0.3) +
+   geom_vline(xintercept = 635000000, colour="red", lwd=0.3) +
+   geom_vline(xintercept = 635600441, colour="green", lwd=0.3) +
+   geom_vline(xintercept = 644277239 , colour="blue", lwd=0.3) +
+  ggtitle(label = paste0("Dot plot of ",ref," chr2D against chr2D of ",query), subtitle =  paste0("Alignments longer than ", min_size, " bp")) +
+  theme(plot.title=element_text(size=12, face = "bold.italic"))
+dev.off()
+
+
+#========================================================
+#===== plot for region at interval where the xgwm320 had a hit on chr2D of Julius  ======
+#===== alignments longer then 10kb, for a specific region ======
+
+tiff(paste0(plot_dir,date,"_dot_plot",ref," _2D_VS_",query,"_","Xgwm320_hit_CS_Julius",min_size,"bp.tiff"), res = 300, width = 8.3, height = 4.8, units = "in")
+
+ comparison_filt_all %>% filter(rs >= 644000000) %>%  filter(qs >= 655000000) %>% filter(r_length >= 10000) ->test_dat
+  
+  test_dat %>% plot_by_perc_id_cap(., cap_lower = 97, cap_upper = 100) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    theme(axis.text.x = element_text(size = 7 )) +
+   theme(axis.text.y = element_text(size = 7)) +
+  scale_y_continuous(breaks = seq(min(test_dat$qs),max(test_dat$qs) ,250000), labels = scales::comma, name = paste0(query, " chr2D")) +
+  scale_x_continuous(breaks = seq(min(test_dat$rs),max(test_dat$rs) ,250000), labels = scales::comma, name = paste0(ref, " chr2D")) +
+     geom_hline(yintercept =656817041 , colour="red", lwd=0.3) +
+    geom_vline(xintercept = 644277239, colour="red", lwd=0.3) +
+      ggtitle(label = paste0("Dot plot of ",ref," chr2D against chr2D of ",query, " alignments longer than ",min_size," bp")) +
+    labs(subtitle = "Red line indicate location of hit for Xgwm320 SSR marker psuedo-sequence in each genome", caption = "On Julius:656,817,041 Mbp \n On Chinese spring:644,277,239 Mbp") +
+  theme(plot.title=element_text(size=10))
+  
+  dev.off()
+  
+```
+
+### Reading in the data with Julius as the reference and CS as the query
+
+```{r}
+
+base_dir <- "/Users/waweru/Documents/2022/Python_learning/python_learning_with_Burkhard/chr2D_CS_635-650Mb/mummer_out/"
+
+# because we are looking at the whole chromosome, I start with a threshold of 0 for all alignmnents
+# now using a threshold of 10kb alignmnents, based on lit that excluding shorter alignments 
+#between non-syntenic retrotransposons which have a median size of 9584 bp in whea
+
+
+cut_off <- 99.99
+
+chr <- "2D"
+chrom <- paste0("chr", chr)
+
+# this the reference,
+variety <- "julius"
+
+# the query being compared to the reference
+query <- "chinesespring"
+
+data_dir_query <- paste0(base_dir,query,"/",variety,"_2D_VS_",query,"_2D.delta")
+
+plot_dir <-  paste0(base_dir,query,"/")
+
+ref <- variety
+
+data_dir_query
+plot_dir
+```
+
+Read all the data
+```{r}
+#============ read the data with all the alignments, original function =========
+#==========================================================
+
+min_size <- 0
+comparison_filt_all <- pre_plot_analysis(delta_path = data_dir_query, min_size = min_size)
+
+#=== read the data with filter function ===========================
+#==========================================================
+min_size <- 10000
+ref_start <- 600000000
+ref_end <- 661246758
+
+comparison_filt_Jul <- pre_plot_analysis_ref_filt(delta_path = data_dir_query, min_size = min_size, ref_start = ref_start,ref_end = ref_end)
+```
+Looking at small specif regions. Here looking at the interval where the xgwm320 had a hit on chr2D of Julius.
+
+```{r}
+tiff(paste0(plot_dir,date,"_dot_plot",ref," _2D_VS_",query,"_","Xgwm320_hit_CS_Julius",min_size,"bp.tiff"), res = 300, width = 8.3, height = 4.8, units = "in")
+
+ comparison_filt_Jul %>% filter(rs >= 655000000)%>% filter(re <= 657750000) %>%  filter(qs >= 644000000) %>% filter(qe <= 645516000)-> test_dat_Jul
+  
+  test_dat_Jul %>% plot_by_perc_id_cap(., cap_lower = 97, cap_upper = 100) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    theme(axis.text.x = element_text(size = 7 )) +
+   theme(axis.text.y = element_text(size = 7)) +
+  scale_y_continuous(breaks = seq(min(test_dat_Jul$qs),max(test_dat_Jul$qs) ,250000), labels = scales::comma, name = paste0(query, " chr2D")) +
+  scale_x_continuous(breaks = seq(min(test_dat_Jul$rs),max(test_dat_Jul$rs) ,250000), labels = scales::comma, name = paste0(ref, " chr2D")) +
+     geom_hline(yintercept = 644277239, colour="red", lwd=0.3) +
+    geom_vline(xintercept = 656817041, colour="red", lwd=0.3) +
+      ggtitle(label = paste0("Dot plot of ",ref," chr2D against chr2D of ",query, " alignments longer than ",min_size," bp")) +
+    labs(subtitle = "Red line indicate location of hit for Xgwm320 SSR marker psuedo-sequence in each genome", caption = "On Julius:656,817,041 Mbp \n On Chinese spring:644,277,239 Mbp") +
+  theme(plot.title=element_text(size=10))
+  
+  dev.off()
+  
+```
