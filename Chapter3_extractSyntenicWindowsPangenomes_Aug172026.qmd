@@ -1,0 +1,537 @@
+---
+title: "Chinese Spring-anchored 1 Mb synteny mapping"
+author: "Bernice N Waweru"
+date: today
+format:
+  docx:
+    toc: true
+    number-sections: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+# Overview
+
+This analysis is run in two parts:
+
+1. Build a Chinese Spring-anchored 1 Mb mapping table.
+2. Use that table to retrieve the corresponding interval in each pangenome.
+
+The terminal pre-processing is included below for reproducibility but is not run when this document is rendered.
+
+# Terminal pre-processing
+
+Run this chunk once in Terminal. It extracts the Chinese Spring comparisons and separates the alternating Chinese Spring and pangenome rows.
+
+```{bash}
+#| eval: false
+
+project_dir="/Users/waweru/Documents/2022/kmc_IBSpy_AP/10wheatgenomes_mummer_conversions"
+input_file="$project_dir/concatenated/merged_in_windows__ws-100000_round-3_flank-50000.tsv"
+paired_file="$project_dir/concatenated/chinese_merged_in_windows_ws_100000_round-3_flank_50000.tsv"
+chinese_file="$project_dir/concatenated/chineseref_chinese_rows_feb082023.tsv"
+pangenome_file="$project_dir/concatenated/chineseref_pangenome_rows_feb082023.tsv"
+
+# Retain comparisons in which Chinese Spring is the assembly.
+awk 'BEGIN {FS=OFS="\t"} $1 == "chinese"' "$input_file" > "$paired_file"
+
+# Each alignment is represented by two consecutive rows.
+awk 'NR % 2 == 1' "$paired_file" > "$chinese_file"
+awk 'NR % 2 == 0' "$paired_file" > "$pangenome_file"
+
+# The two output files should contain the same number of rows.
+wc -l "$chinese_file" "$pangenome_file"
+```
+
+# R setup
+
+Edit only project_dir if the analysis folder moves.
+
+```{r}
+library(tidyverse)
+library(flextable)
+
+project_dir <- "/Users/waweru/Documents/2022/kmc_IBSpy_AP/10wheatgenomes_mummer_conversions"
+data_dir <- file.path(project_dir, "concatenated")
+output_dir <- file.path(project_dir, "2026-Oct_syntenicMappingOutputs")
+
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+chinese_file <- file.path(
+  data_dir,
+  "chineseref_chinese_rows_feb082023.tsv"
+)
+
+pangenome_file <- file.path(
+  data_dir,
+  "chineseref_pangenome_rows_feb082023.tsv"
+)
+
+mapping_file <- file.path(
+  output_dir,
+  "01_CS_anchored_1Mb_mapping_dataset.tsv"
+)
+
+set_flextable_defaults(
+  font.family = "Arial",
+  font.size = 9,
+  text.align = "center"
+)
+```
+
+# Part 1: build the 1 Mb mapping table
+
+The two files produced by AWK are imported and checked before they are combined. One summary row is retained for each Chinese Spring 1 Mb block and pangenome reference.
+
+```{r}
+headers_syn_dat <- c(
+  "assembly",
+  "reference",
+  "chromosome",
+  "start",
+  "end",
+  "block_no",
+  "orientation"
+)
+
+synteny_col_types <- cols(
+  assembly = col_character(),
+  reference = col_character(),
+  chromosome = col_character(),
+  start = col_double(),
+  end = col_double(),
+  block_no = col_character(),
+  orientation = col_character()
+)
+
+chinese <- read_tsv(
+  chinese_file,
+  col_names = headers_syn_dat,
+  col_types = synteny_col_types,
+  progress = TRUE
+)
+
+pangenome <- read_tsv(
+  pangenome_file,
+  col_names = headers_syn_dat,
+  col_types = synteny_col_types,
+  progress = TRUE
+)
+
+if (nrow(chinese) != nrow(pangenome)) {
+  stop("The Chinese Spring and pangenome files have different row counts.")
+}
+
+if (
+  !identical(chinese$reference, pangenome$reference) ||
+  !identical(chinese$block_no, pangenome$block_no)
+) {
+  stop("The alternating Chinese Spring and pangenome rows are not correctly paired.")
+}
+
+# Spelta and the self-comparison are not used in the chromosome-scale panel.
+excluded_references <- c("IWGSCv1.1", "spelta")
+
+synteny_pairs <- tibble(
+  reference = chinese$reference,
+  chromosome = chinese$chromosome,
+  block_no_chi = chinese$block_no,
+  chromosome_pan = pangenome$chromosome,
+  start_pan = pangenome$start,
+  end_pan = pangenome$end
+) %>%
+  filter(!reference %in% excluded_references) %>%
+  mutate(
+    chrom = sub("__.*$", "", chromosome),
+    block_start = as.double(
+      sub(".*:([0-9]+)-([0-9]+)$", "\\1", block_no_chi)
+    ),
+    block_per_MB = floor(block_start / 1000000),
+    block_per_chr_MB = paste0(chrom, "_", block_per_MB),
+    pan_lower = pmin(start_pan, end_pan),
+    pan_upper = pmax(start_pan, end_pan),
+    alignment_span_bp = abs(end_pan - start_pan) + 1
+  )
+
+# Summarise each Chinese Spring 1 Mb block and retain one representative hit.
+synteny_1Mb <- synteny_pairs %>%
+  group_by(
+    chrom,
+    block_per_MB,
+    block_per_chr_MB,
+    reference,
+    chromosome_pan
+  ) %>%
+  summarise(
+    cs_block_start_bp = block_per_MB * 1000000 + 1,
+    cs_block_end_bp = (block_per_MB + 1) * 1000000,
+    pangenome_start_bp = min(pan_lower, na.rm = TRUE),
+    pangenome_end_bp = max(pan_upper, na.rm = TRUE),
+    representative_pan_start_bp = start_pan[
+      order(alignment_span_bp, decreasing = TRUE, na.last = TRUE)
+    ][1],
+    representative_pan_end_bp = end_pan[
+      order(alignment_span_bp, decreasing = TRUE, na.last = TRUE)
+    ][1],
+    alignment_count = n(),
+    aligned_bp = sum(alignment_span_bp, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # If a block maps to more than one chromosome, retain the strongest mapping.
+  group_by(chrom, block_per_MB, reference) %>%
+  slice_max(aligned_bp, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  group_by(chrom, block_per_MB) %>%
+  mutate(reference_count = n_distinct(reference)) %>%
+  ungroup() %>%
+  arrange(chrom, block_per_MB, reference)
+
+write_tsv(synteny_1Mb, mapping_file)
+
+message(
+  "Saved ", nrow(synteny_1Mb),
+  " reference-by-block mappings to: ", mapping_file
+)
+
+# A short check of the generated dataset.
+synteny_1Mb %>%
+  distinct(chrom, block_per_MB, reference_count) %>%
+  count(reference_count, name = "Number of 1 Mb blocks") %>%
+  arrange(desc(reference_count)) %>%
+  flextable() %>%
+  theme_booktabs() %>%
+  autofit()
+```
+
+The saved mapping table is the input for Part 2. Part 2 can therefore be run later or in a new R session after running the setup chunk.
+
+# Part 2: extract syntenic positions
+
+Set the Chinese Spring target interval below. The main search uses 1 Mb blocks shared by all but at most one pangenome. A reference-specific search is used when a reference is missing from a shared boundary block or when both shared boundaries collapse to the same rounded pangenome position.
+
+```{r}
+target_chrom <- "chr2D"
+target_start_bp <- 635599182
+target_end_bp <- 650840934
+allowed_missing_references <- 2
+
+target_start_block <- floor(target_start_bp / 1000000)
+target_end_block <- ceiling(target_end_bp / 1000000)
+
+synteny_1Mb <- read_tsv(
+  mapping_file,
+  show_col_types = FALSE,
+  progress = TRUE
+)
+
+target_mapping <- synteny_1Mb %>%
+  filter(chrom == target_chrom)
+
+if (nrow(target_mapping) == 0) {
+  stop("No mappings were found for ", target_chrom, ".")
+}
+
+required_columns <- c(
+  "reference", "block_per_MB", "chromosome_pan",
+  "representative_pan_start_bp"
+)
+
+if (!all(required_columns %in% names(target_mapping))) {
+  stop("Part 1 must be rerun before running the revised Part 2.")
+}
+
+all_references <- target_mapping %>%
+  distinct(reference)
+
+minimum_shared_references <- max(
+  nrow(all_references) - allowed_missing_references,
+  1
+)
+
+# Identify the common Chinese Spring blocks used for the main search.
+shared_blocks <- target_mapping %>%
+  distinct(block_per_MB, reference) %>%
+  count(block_per_MB, name = "reference_count") %>%
+  filter(reference_count >= minimum_shared_references)
+
+shared_start_block <- shared_blocks %>%
+  filter(block_per_MB <= target_start_block) %>%
+  slice_max(block_per_MB, n = 1, with_ties = FALSE) %>%
+  pull(block_per_MB)
+
+shared_end_block <- shared_blocks %>%
+  filter(block_per_MB >= target_end_block) %>%
+  slice_min(block_per_MB, n = 1, with_ties = FALSE) %>%
+  pull(block_per_MB)
+
+if (length(shared_start_block) == 0 || length(shared_end_block) == 0) {
+  stop("Suitable shared start and end blocks were not found.")
+}
+
+message(
+  "Shared CS anchors: ", shared_start_block, "-", shared_end_block,
+  " Mb; minimum references per block: ", minimum_shared_references
+)
+
+# Extract the start and end positions from the shared blocks.
+shared_start_positions <- target_mapping %>%
+  filter(block_per_MB == shared_start_block) %>%
+  transmute(
+    reference,
+    start_cs_block_mb = block_per_MB,
+    start_pan_chromosome = chromosome_pan,
+    start_boundary_bp = floor(
+      representative_pan_start_bp / 1000000
+    ) * 1000000,
+    start_source = "Shared CS block"
+  )
+
+shared_start_positions
+
+shared_end_positions <- target_mapping %>%
+  filter(block_per_MB == shared_end_block) %>%
+  transmute(
+    reference,
+    end_cs_block_mb = block_per_MB,
+    end_pan_chromosome = chromosome_pan,
+    end_boundary_bp = ceiling(
+      representative_pan_start_bp / 1000000
+    ) * 1000000,
+    end_source = "Shared CS block"
+  )
+
+shared_end_positions
+
+# Retain shared results only when they define a valid interval.
+shared_position_pairs <- full_join(
+  shared_start_positions,
+  shared_end_positions,
+  by = "reference"
+)
+
+valid_shared_pairs <- shared_position_pairs %>%
+  filter(
+    !is.na(start_boundary_bp),
+    !is.na(end_boundary_bp),
+    start_pan_chromosome == end_pan_chromosome,
+    start_boundary_bp != end_boundary_bp
+  )
+
+valid_shared_pairs
+
+# Missing, conflicting or collapsed results are searched independently.
+fallback_references <- all_references %>%
+  anti_join(valid_shared_pairs, by = "reference")
+
+if (nrow(fallback_references) > 0) {
+  message(
+    "Independent fallback search: ",
+    paste(fallback_references$reference, collapse = ", ")
+  )
+}
+
+fallback_start_candidates <- target_mapping %>%
+  semi_join(fallback_references, by = "reference") %>%
+  filter(block_per_MB <= target_start_block) %>%
+  transmute(
+    reference,
+    start_cs_block_mb = block_per_MB,
+    start_pan_chromosome = chromosome_pan,
+    start_boundary_bp = floor(
+      representative_pan_start_bp / 1000000
+    ) * 1000000,
+    start_distance = target_start_block - block_per_MB
+  )
+
+fallback_end_candidates <- target_mapping %>%
+  semi_join(fallback_references, by = "reference") %>%
+  filter(block_per_MB >= target_end_block) %>%
+  transmute(
+    reference,
+    end_cs_block_mb = block_per_MB,
+    end_pan_chromosome = chromosome_pan,
+    end_boundary_bp = ceiling(
+      representative_pan_start_bp / 1000000
+    ) * 1000000,
+    end_distance = block_per_MB - target_end_block
+  )
+
+# Choose the closest pair that maps to one chromosome and has two boundaries.
+fallback_pairs <- inner_join(
+  fallback_start_candidates,
+  fallback_end_candidates,
+  by = "reference"
+) %>%
+  filter(
+    start_pan_chromosome == end_pan_chromosome,
+    start_boundary_bp != end_boundary_bp
+  ) %>%
+  mutate(
+    anchor_distance = start_distance + end_distance,
+    interval_width_bp = abs(end_boundary_bp - start_boundary_bp)
+  ) %>%
+  group_by(reference) %>%
+  slice_min(anchor_distance, n = 1, with_ties = TRUE) %>%
+  slice_min(interval_width_bp, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  transmute(
+    reference,
+    start_cs_block_mb,
+    start_pan_chromosome,
+    start_boundary_bp,
+    start_source = "Reference-specific fallback",
+    end_cs_block_mb,
+    end_pan_chromosome,
+    end_boundary_bp,
+    end_source = "Reference-specific fallback"
+  )
+
+selected_position_pairs <- bind_rows(
+  valid_shared_pairs,
+  fallback_pairs
+)
+
+selected_position_pairs
+
+# Combine the selected positions into one interval per reference.
+syntenic_positions <- all_references %>%
+  left_join(selected_position_pairs, by = "reference") %>%
+  mutate(
+    chromosome_match = (
+      !is.na(start_pan_chromosome) &
+      !is.na(end_pan_chromosome) &
+      start_pan_chromosome == end_pan_chromosome
+    ),
+    pangenome_chromosome = case_when(
+      chromosome_match ~ sub("__.*$", "", start_pan_chromosome),
+      is.na(start_pan_chromosome) ~ sub("__.*$", "", end_pan_chromosome),
+      is.na(end_pan_chromosome) ~ sub("__.*$", "", start_pan_chromosome),
+      TRUE ~ paste(
+        sub("__.*$", "", start_pan_chromosome),
+        sub("__.*$", "", end_pan_chromosome),
+        sep = " / "
+      )
+    ),
+    syntenic_start_bp = if_else(
+      chromosome_match,
+      pmin(start_boundary_bp, end_boundary_bp),
+      NA_real_
+    ),
+    syntenic_end_bp = if_else(
+      chromosome_match,
+      pmax(start_boundary_bp, end_boundary_bp),
+      NA_real_
+    ),
+    interval_size_bp = syntenic_end_bp - syntenic_start_bp + 1,
+    Notes = case_when(
+      is.na(start_cs_block_mb) | is.na(end_cs_block_mb) ~
+        "No valid start-end pair was recovered",
+      !chromosome_match ~
+        "Start and end anchors mapped to different chromosomes",
+      start_source == "Reference-specific fallback" |
+        end_source == "Reference-specific fallback" ~
+        paste0(
+          "Reference-specific fallback; CS anchors: ",
+          start_cs_block_mb, "-", end_cs_block_mb, " Mb"
+        ),
+      TRUE ~ ""
+    ),
+    Genome = recode(
+      reference,
+      arinalrfor = "ArinaLrFor",
+      jagger = "Jagger",
+      julius = "Julius",
+      lancer = "Lancer",
+      landmark = "Landmark",
+      mace = "Mace",
+      norin61 = "Norin 61",
+      stanley = "Stanley",
+      sy_mattis = "SY Mattis",
+      .default = str_to_title(str_replace_all(reference, "_", " "))
+    )
+  ) %>%
+  transmute(
+    Genome,
+    Chromosome = pangenome_chromosome,
+    syntenic_start_bp,
+    syntenic_end_bp,
+    interval_size_bp,
+    Notes
+  )
+
+# Add the original Chinese Spring interval to the combined table.
+chinese_spring_position <- tibble(
+  Genome = "Chinese Spring",
+  Chromosome = target_chrom,
+  syntenic_start_bp = target_start_bp,
+  syntenic_end_bp = target_end_bp,
+  interval_size_bp = target_end_bp - target_start_bp + 1,
+  Notes = ""
+)
+
+final_table <- bind_rows(
+  chinese_spring_position,
+  syntenic_positions
+) %>%
+  arrange(desc(Genome == "Chinese Spring"), Genome) %>%
+  rename(
+    "Syntenic start (bp)" = syntenic_start_bp,
+    "Syntenic end (bp)" = syntenic_end_bp,
+    "Interval size (bp)" = interval_size_bp
+  )
+
+# Remove the Notes column when no warnings are present.
+if (all(final_table$Notes == "")) {
+  final_table <- select(final_table, -Notes)
+}
+
+final_tsv <- file.path(
+  output_dir,
+  "02_chr2D_635599182-650840934_syntenic_positions.tsv"
+)
+
+final_docx <- file.path(
+  output_dir,
+  "02_chr2D_635599182-650840934_syntenic_positions.docx"
+)
+
+write_tsv(final_table, final_tsv, na = "")
+
+table_caption <- paste0(
+  "Syntenic positions corresponding to the Chinese Spring RefSeq v1.0 ",
+  target_chrom, " interval ",
+  scales::comma(target_start_bp), "-", scales::comma(target_end_bp),
+  " across wheat pangenome assemblies."
+)
+
+thesis_table <- final_table %>%
+  flextable() %>%
+  set_caption(caption = table_caption) %>%
+  theme_booktabs() %>%
+  bold(part = "header") %>%
+  colformat_num(
+    j = c(
+      "Syntenic start (bp)",
+      "Syntenic end (bp)",
+      "Interval size (bp)"
+    ),
+    big.mark = ",",
+    digits = 0,
+    na_str = ""
+  ) %>%
+  align(j = "Genome", align = "left", part = "all") %>%
+  autofit() %>%
+  set_table_properties(layout = "autofit")
+
+save_as_docx(
+  values = list("Syntenic positions" = thesis_table),
+  path = final_docx
+)
+
+message("Saved the final table to: ", final_tsv)
+message("Saved the Word table to: ", final_docx)
+
+thesis_table
+```
