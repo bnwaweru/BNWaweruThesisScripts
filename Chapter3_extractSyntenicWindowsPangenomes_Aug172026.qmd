@@ -1,537 +1,803 @@
 ---
-title: "Chinese Spring-anchored 1 Mb synteny mapping"
+title: "Extracting corresponding syntenic windows of pangenomes"
 author: "Bernice N Waweru"
-date: today
-format:
-  docx:
-    toc: true
-    number-sections: true
-execute:
-  echo: true
-  warning: false
-  message: false
+date: "`r Sys.Date()`"
+format: html
+toc: true
+toc-depth: 3
+number-sections: true
+number-depth: 3
+prefer-html: true
+#highlight-style: github
 ---
 
 # Overview
 
-This analysis is run in two parts:
+This document finds, for a target interval on Chinese Spring, the **corresponding (syntenic)
+interval in each of the ten wheat pangenome assemblies**. Those per-assembly coordinates are what
+the IBSpy haplotype pipeline is then run on: the same locus has to be cut out of every assembly
+before haplotypes called against different references can be compared.
 
-1. Build a Chinese Spring-anchored 1 Mb mapping table.
-2. Use that table to retrieve the corresponding interval in each pangenome.
+The input is a whole-genome alignment of each pangenome assembly against Chinese Spring (MUMmer
+output, converted into 100 kb windows). The alignment blocks are irregular - they
+differ in size, number and orientation between assemblies - so there is no direct coordinate
+conversion. The solution developed here is to **anchor on 1 Mb blocks of Chinese Spring**: round
+every alignment to the Chinese Spring megabase it falls in, keep the blocks that are present in
+nearly all assemblies, and read the corresponding pangenome position off the block that brackets
+each end of the target interval.
 
-The terminal pre-processing is included below for reproducibility but is not run when this document is rendered.
+The analysis runs in two parts:
 
-# Terminal pre-processing
+1. **Build the Chinese Spring-anchored mapping table** —
+   `02_chinese_pangenome_syntenic_regions_MB_Blocks_March-07-2023.csv`, one row per alignment with
+   its 1 Mb block label attached. Built once, in Feb–Mar 2023, and reused for every target interval
+   since.
+2. **Extract the syntenic positions of one target interval** — the part that is re-run for each new
+   region of interest. Worked here for **chr5B:6–9 Mb** (a yellow rust region early 2026).
 
-Run this chunk once in Terminal. It extracts the Chinese Spring comparisons and separates the alternating Chinese Spring and pangenome rows.
+# Part 1: build the Chinese Spring-anchored mapping table
 
-```{bash}
-#| eval: false
-
-project_dir="/Users/waweru/Documents/2022/kmc_IBSpy_AP/10wheatgenomes_mummer_conversions"
-input_file="$project_dir/concatenated/merged_in_windows__ws-100000_round-3_flank-50000.tsv"
-paired_file="$project_dir/concatenated/chinese_merged_in_windows_ws_100000_round-3_flank_50000.tsv"
-chinese_file="$project_dir/concatenated/chineseref_chinese_rows_feb082023.tsv"
-pangenome_file="$project_dir/concatenated/chineseref_pangenome_rows_feb082023.tsv"
-
-# Retain comparisons in which Chinese Spring is the assembly.
-awk 'BEGIN {FS=OFS="\t"} $1 == "chinese"' "$input_file" > "$paired_file"
-
-# Each alignment is represented by two consecutive rows.
-awk 'NR % 2 == 1' "$paired_file" > "$chinese_file"
-awk 'NR % 2 == 0' "$paired_file" > "$pangenome_file"
-
-# The two output files should contain the same number of rows.
-wc -l "$chinese_file" "$pangenome_file"
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F)
+#setwd("/Volumes/waweru/2022/kmc_IBSpy_AP/10wheatgenomes_mummer_conversions") # on nbi documents folder
+setwd("/Users/waweru/Documents/2022/kmc_IBSpy_AP/10wheatgenomes_mummer_conversions") # on PC
+#To render the document into word, am referring to the [quarto.org](https://quarto.org/docs/output-formats/ms-word.html) guidelines.
 ```
 
-# R setup
+## Terminal pre-processing
 
-Edit only project_dir if the analysis folder moves.
+#### After discussions, agreed to try a different strategy
 
-```{r}
+Rather than get a script that has to extract corresponding coordinates all the
+time:
+
+-   first, count the block in chinese spring that have corresponding blocks in
+    all the other pangenomes, ie 10
+
+-   then extract only those blocks that have corresponding windows into one file
+    \* moving further use this as the file to extract corresponding coordinates
+
+I think we can do it easily in R, but first separate the column with the start
+end coordinate of ref and assembly into 1 as they are similar in the block
+column but create a column with the block and chromosome information for easier
+manipulation
+
+### First read the file into R and create the unique column
+
+First extract data for the assembly chinese spring only and save in a separate
+file, makes it easier working from a small file, rather than a file that is
+2.9GB we work with a file that is 272.4MB. The block column actually has the
+chromosome and block information , awesome!
+
+Check that in the file we have all the pangenomes.
+
+The merged MUMmer file holds every pairwise comparison between the assemblies, so the first step
+keeps only the rows where Chinese Spring is the *assembly* being compared. The `uniq -c` output
+pasted into the chunk is the check that all ten pangenomes are present, and it is also where the
+`IWGSCv1.1` rows show up - 2,838 of them, all on chromosome 6A, which are dropped in R below.
+
+```{r, eval=FALSE, engine='bash'}
+
+awk '{if ($1 == "chinese") print $0}' concatenated/merged_in_windows__ws-100000_round-3_flank-50000.tsv > chinese_merged_in_windows_ws_100000_round-3_flank_50000.tsv
+
+head concatenated/chinese_merged_in_windows_ws_100000_round-3_flank_50000.tsv 
+chinese	spelta	chr1A__chi	920000	942000	chr1A__chi:850001-950000	+
+chinese	spelta	chr1A__tsp	898000	920000	chr1A__chi:850001-950000	+
+chinese	spelta	chr1A__chi	920000	942000	chr1A__chi:900001-1000000	+
+chinese	spelta	chr1A__tsp	898000	920000	chr1A__chi:900001-1000000	+
+chinese	spelta	chr1A__chi	1259000	1283000	chr1A__chi:1200001-1300000	+
+chinese	spelta	chr1A__tsp	1230000	1254000	chr1A__chi:1200001-1300000	+
+chinese	spelta	chr1A__chi	1259000	1350000	chr1A__chi:1250001-1350000	+
+chinese	spelta	chr1A__tsp	1230000	1320000	chr1A__chi:1250001-1350000	+
+chinese	spelta	chr1A__chi	1319000	1373000	chr1A__chi:1300001-1400000	+
+chinese	spelta	chr1A__tsp	1289000	1343000	chr1A__chi:1300001-1400000	+
+
+ awk '{print $2}' concatenated/chinese_merged_in_windows_ws_100000_round-3_flank_50000.tsv | sort | uniq -c
+2838 IWGSCv1.1
+351872 arinalrfor
+375984 jagger
+358260 julius
+371114 lancer
+360380 landmark
+389154 mace
+377064 norin61
+123498 spelta
+362290 stanley
+362534 sy_mattis
+
+```
+
+Notice above that we have some rows from `IWGSCv1.1`, which we don't want so we
+will remove these.
+
+Next we separate the file into two, one with rows from chinese spring, and the
+other from pangenome, because they share the block, we can merge based on this
+column in R
+
+**Why the odd/even split works.** Each alignment occupies **two consecutive rows** — the odd row
+carries the Chinese Spring side of the block, the even row the pangenome side — and both rows repeat
+the same `block_no`. Splitting on `NR % 2` therefore produces two files that can be recombined in R
+on that shared block identifier. The `head` output pasted below each command is the check that the
+split landed on the right rows.
+
+```{r, eval=FALSE, engine='bash'}
+# print every second row starting with the first, meaning we print the first row, then every other second one, so it will skip the next row which will belong to a pangenome line but in the same block
+
+awk 'NR%2==1' chinese_merged_in_windows_ws_100000_round-3_flank_50000.tsv | head
+chinese	spelta	chr1A__chi	920000	942000	chr1A__chi:850001-950000	+
+chinese	spelta	chr1A__chi	920000	942000	chr1A__chi:900001-1000000	+
+chinese	spelta	chr1A__chi	1259000	1283000	chr1A__chi:1200001-1300000	+
+chinese	spelta	chr1A__chi	1259000	1350000	chr1A__chi:1250001-1350000	+
+chinese	spelta	chr1A__chi	1319000	1373000	chr1A__chi:1300001-1400000	+
+chinese	spelta	chr1A__chi	1350001	1373000	chr1A__chi:1350001-1450000	+
+chinese	spelta	chr1A__chi	2836000	2850000	chr1A__chi:2750001-2850000	+
+chinese	spelta	chr1A__chi	2836000	2875000	chr1A__chi:2800001-2900000	+
+chinese	spelta	chr1A__chi	2850001	2875000	chr1A__chi:2850001-2950000	+
+chinese	spelta	chr1A__chi	3474000	3500000	chr1A__chi:3400001-3500000	+
+
+awk 'NR%2==1' chinese_merged_in_windows_ws_100000_round-3_flank_50000.tsv > chineseref_chinese_rows_feb082023.tsv
+ 
+head chineseref_pangenome_rows_feb082023.tsv 
+chinese	spelta	chr1A__tsp	898000	920000	chr1A__chi:850001-950000	+
+chinese	spelta	chr1A__tsp	898000	920000	chr1A__chi:900001-1000000	+
+chinese	spelta	chr1A__tsp	1230000	1254000	chr1A__chi:1200001-1300000	+
+chinese	spelta	chr1A__tsp	1230000	1320000	chr1A__chi:1250001-1350000	+
+chinese	spelta	chr1A__tsp	1289000	1343000	chr1A__chi:1300001-1400000	+
+chinese	spelta	chr1A__tsp	1320001	1343000	chr1A__chi:1350001-1450000	+
+chinese	spelta	chr1A__tsp	3463000	3477000	chr1A__chi:2750001-2850000	+
+chinese	spelta	chr1A__tsp	3463000	3502000	chr1A__chi:2800001-2900000	+
+chinese	spelta	chr1A__tsp	3477001	3502000	chr1A__chi:2850001-2950000	+
+chinese	spelta	chr1A__tsp	4173000	4199000	chr1A__chi:3400001-3500000	+
+
+# now for the pangenome rows, we print every other second line beginning from 0, so essentially just print every other second line, this gives us the pangenome rows
+
+awk 'NR%2==0' chinese_merged_in_windows_ws_100000_round-3_flank_50000.tsv > chineseref_pangenome_rows_feb082023.tsv
+
+head chineseref_pangenome_rows_feb082023.tsv 
+chinese	spelta	chr1A__tsp	898000	920000	chr1A__chi:850001-950000	+
+chinese	spelta	chr1A__tsp	898000	920000	chr1A__chi:900001-1000000	+
+chinese	spelta	chr1A__tsp	1230000	1254000	chr1A__chi:1200001-1300000	+
+chinese	spelta	chr1A__tsp	1230000	1320000	chr1A__chi:1250001-1350000	+
+chinese	spelta	chr1A__tsp	1289000	1343000	chr1A__chi:1300001-1400000	+
+chinese	spelta	chr1A__tsp	1320001	1343000	chr1A__chi:1350001-1450000	+
+chinese	spelta	chr1A__tsp	3463000	3477000	chr1A__chi:2750001-2850000	+
+chinese	spelta	chr1A__tsp	3463000	3502000	chr1A__chi:2800001-2900000	+
+chinese	spelta	chr1A__tsp	3477001	3502000	chr1A__chi:2850001-2950000	+
+chinese	spelta	chr1A__tsp	4173000	4199000	chr1A__chi:3400001-3500000	+
+
+## extract the headers, need to name column of extracted data correctly
+head -n 1 merged_in_windows__ws-100000_round-3_flank-50000.tsv
+
+assembly	reference	chromosome	start	end	block_no	orientation
+
+```
+
+## Import into R
+
+Import into r and add appropriate headers, them merge
+
+```{r, load-libraries}
+
 library(tidyverse)
+library(magrittr)
 library(flextable)
 
-project_dir <- "/Users/waweru/Documents/2022/kmc_IBSpy_AP/10wheatgenomes_mummer_conversions"
-data_dir <- file.path(project_dir, "concatenated")
-output_dir <- file.path(project_dir, "2026-Oct_syntenicMappingOutputs")
-
-dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-
-chinese_file <- file.path(
-  data_dir,
-  "chineseref_chinese_rows_feb082023.tsv"
-)
-
-pangenome_file <- file.path(
-  data_dir,
-  "chineseref_pangenome_rows_feb082023.tsv"
-)
-
-mapping_file <- file.path(
-  output_dir,
-  "01_CS_anchored_1Mb_mapping_dataset.tsv"
-)
-
+# set defaults for printing tables
 set_flextable_defaults(
-  font.family = "Arial",
-  font.size = 9,
-  text.align = "center"
-)
+  font.family = "Arial", font.size = 5, 
+  border.color = "blue", text.align = "center")
 ```
 
-# Part 1: build the 1 Mb mapping table
-
-The two files produced by AWK are imported and checked before they are combined. One summary row is retained for each Chinese Spring 1 Mb block and pangenome reference.
+Neither file has a header, so the names extracted with `head -n 1` above are applied after reading.
+`uniq_block` pastes the reference onto the block id (`landmark_chr1A__chi:850001-950000`), which is
+what makes the block identifier unique per reference and so usable as a join key — a block id on its
+own is repeated once for every reference. The two `nrow()` calls are the pairing check: both files
+must hold the same **1,717,494** rows.
 
 ```{r}
-headers_syn_dat <- c(
-  "assembly",
-  "reference",
-  "chromosome",
-  "start",
-  "end",
-  "block_no",
-  "orientation"
-)
+#============== the file with the rows of chinese
 
-synteny_col_types <- cols(
-  assembly = col_character(),
-  reference = col_character(),
-  chromosome = col_character(),
-  start = col_double(),
-  end = col_double(),
-  block_no = col_character(),
-  orientation = col_character()
-)
+headers_syn_dat <- c("assembly",	"reference",	"chromosome",	"start",	"end",	"block_no",	"orientation")
 
-chinese <- read_tsv(
-  chinese_file,
-  col_names = headers_syn_dat,
-  col_types = synteny_col_types,
-  progress = TRUE
-)
+read.table(file = "concatenated/chineseref_chinese_rows_feb082023.tsv", sep = "\t", header = F) -> chinese
 
-pangenome <- read_tsv(
-  pangenome_file,
-  col_names = headers_syn_dat,
-  col_types = synteny_col_types,
-  progress = TRUE
-)
+names(chinese) <- headers_syn_dat
 
-if (nrow(chinese) != nrow(pangenome)) {
-  stop("The Chinese Spring and pangenome files have different row counts.")
-}
+head(chinese) %>% flextable::flextable()
+nrow(chinese) # 1,717,494
 
-if (
-  !identical(chinese$reference, pangenome$reference) ||
-  !identical(chinese$block_no, pangenome$block_no)
-) {
-  stop("The alternating Chinese Spring and pangenome rows are not correctly paired.")
-}
+# add the unique column
 
-# Spelta and the self-comparison are not used in the chromosome-scale panel.
-excluded_references <- c("IWGSCv1.1", "spelta")
+chinese %<>% mutate(uniq_block = paste0(reference,"_",block_no))
+chinese %>% filter(reference == "landmark") %>% head() %>% flextable::flextable()
+#head(chinese)
+#================ file with rows of the pangenome 
 
-synteny_pairs <- tibble(
-  reference = chinese$reference,
-  chromosome = chinese$chromosome,
-  block_no_chi = chinese$block_no,
-  chromosome_pan = pangenome$chromosome,
-  start_pan = pangenome$start,
-  end_pan = pangenome$end
-) %>%
-  filter(!reference %in% excluded_references) %>%
-  mutate(
-    chrom = sub("__.*$", "", chromosome),
-    block_start = as.double(
-      sub(".*:([0-9]+)-([0-9]+)$", "\\1", block_no_chi)
-    ),
-    block_per_MB = floor(block_start / 1000000),
-    block_per_chr_MB = paste0(chrom, "_", block_per_MB),
-    pan_lower = pmin(start_pan, end_pan),
-    pan_upper = pmax(start_pan, end_pan),
-    alignment_span_bp = abs(end_pan - start_pan) + 1
-  )
+read.table(file = "concatenated/chineseref_pangenome_rows_feb082023.tsv", header = F, sep = "\t") -> pangen
 
-# Summarise each Chinese Spring 1 Mb block and retain one representative hit.
-synteny_1Mb <- synteny_pairs %>%
-  group_by(
-    chrom,
-    block_per_MB,
-    block_per_chr_MB,
-    reference,
-    chromosome_pan
-  ) %>%
-  summarise(
-    cs_block_start_bp = block_per_MB * 1000000 + 1,
-    cs_block_end_bp = (block_per_MB + 1) * 1000000,
-    pangenome_start_bp = min(pan_lower, na.rm = TRUE),
-    pangenome_end_bp = max(pan_upper, na.rm = TRUE),
-    representative_pan_start_bp = start_pan[
-      order(alignment_span_bp, decreasing = TRUE, na.last = TRUE)
-    ][1],
-    representative_pan_end_bp = end_pan[
-      order(alignment_span_bp, decreasing = TRUE, na.last = TRUE)
-    ][1],
-    alignment_count = n(),
-    aligned_bp = sum(alignment_span_bp, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  # If a block maps to more than one chromosome, retain the strongest mapping.
-  group_by(chrom, block_per_MB, reference) %>%
-  slice_max(aligned_bp, n = 1, with_ties = FALSE) %>%
-  ungroup() %>%
-  group_by(chrom, block_per_MB) %>%
-  mutate(reference_count = n_distinct(reference)) %>%
-  ungroup() %>%
-  arrange(chrom, block_per_MB, reference)
+names(pangen) <- headers_syn_dat
 
-write_tsv(synteny_1Mb, mapping_file)
+head(pangen) %>% flextable::flextable()
+nrow(pangen) # 1,717,494
 
-message(
-  "Saved ", nrow(synteny_1Mb),
-  " reference-by-block mappings to: ", mapping_file
-)
+# add the unique column
 
-# A short check of the generated dataset.
-synteny_1Mb %>%
-  distinct(chrom, block_per_MB, reference_count) %>%
-  count(reference_count, name = "Number of 1 Mb blocks") %>%
-  arrange(desc(reference_count)) %>%
-  flextable() %>%
-  theme_booktabs() %>%
-  autofit()
+pangen %<>% mutate(uniq_block = paste0(reference,"_",block_no))
+
+pangen %>% filter(reference == "jagger") %>% head() %>% flextable::flextable()
 ```
 
-The saved mapping table is the input for Part 2. Part 2 can therefore be run later or in a new R session after running the setup chunk.
+The two file have the same number of rows, *1,717,494* good.
+
+Next merge based on the block. Although essentially the blocks will be repeated
+for every pangenome reference, so we still need column that will be unique based
+on block and reference.
+
+In some blocks, we have more than one pangenome alignment, we use the argument
+`multiple = "all"` to keep all of them.
+
+The join brings the Chinese Spring side (`start_chi`, `end_chi`) and the pangenome side
+(`chromosome_pan`, `start_pan`, `end_pan`) of each alignment onto one row; the `.y` suffixes from the
+join are renamed by `headers_syn_chin`. `IWGSCv1.1` — Chinese Spring against itself, which the chunk
+first confirms is confined to chromosome 6A — is then dropped, leaving the ten pangenome references
+**including `spelta`**. Keeping spelta matters: it is the most diverged assembly and the one most
+often absent from a block, which is precisely what the "9 or more references" filter later allows
+for.
+
+```{r}
+
+synteny_chinese <- inner_join(chinese, pangen, by = "uniq_block", multiple = "all") 
+
+#write.csv(synteny_chinese, file = "01_chinese_pangenome_syntenic_regions_feb082023.csv", quote = F)
+
+# give proper names and keep required columns
+names(synteny_chinese)
+
+ headers_syn_chin <- c("assembly","reference","chromosome","start_chi", "end_chi","block_no_chi", "orientation","uniq_block", "assembly.y","reference.y","chromosome_pan","start_pan", "end_pan","block_no_pan","orientation_pan")
+ 
+ names(synteny_chinese) <- headers_syn_chin
+ 
+# head(synteny_chinese)
+ 
+ # select columns
+ 
+ synteny_chinese %>% select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan") %>% head() %>% flextable::flextable()
+ 
+ # in the reference column there are some from IWGSCv1.1, which are all from chromosome 6A, we do  not want this, so we filter this out
+ synteny_chinese %>% select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan") %>% filter(reference == "IWGSCv1.1") %>% arrange(., chromosome_pan) %>% select(chromosome_pan) %>% unique() %>% flextable::flextable()
+ 
+ synteny_chinese %>% filter (reference != "IWGSCv1.1") %>% select(reference) %>% unique() %>% flextable::flextable()
+ 
+ # removing the rows from IWGSC column
+  synteny_chinese %<>% filter(reference != "IWGSCv1.1")
+  
+  synteny_chinese %>% select(reference) %>% unique() %>% flextable::flextable()
+ 
+```
+
+## How many blocks are shared by all references?
+
+Next we want to keep windows where there is at least one corresponding syntenic
+region from each of the 10 pangenomes
+
+This is the measurement that decided the method. Counting at the native 100 kb window resolution:
+of **277,145** Chinese Spring blocks, only **13,942** have an alignment from all ten references.
+Dropping spelta raises it to **28,779** — still a small fraction. A filter this strict would leave
+the nearest usable anchor a long way from most target intervals.
+
+Note the two different counts being computed: `ref_num = n()` counts rows (alignments), while
+`n_distinct(uniq_block)` counts distinct reference-blocks, i.e. how many *references* are
+represented. The second is the one we used, because a single reference can contribute several
+alignments to the same window.
+
+```{r}
+
+ # now select the column we are interested in and also 
+  # we want to keep the start and end coordinates in the chinese and the pangenome references, and we also keep the uni_block 
+  
+ num_ref_per_chin_block <- synteny_chinese %>% select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan") %>% group_by(block_no_chi) %>% dplyr::summarise(., ref_num=n())
+ 
+ # some references have more than one alignment in a block, we count only the unique occurrence of the reference in a block,
+# we want to know the block where all pangenome references have at least one alignment, i.e a count of 10
+ 
+ num_ref_uniq_per_chin_block <- synteny_chinese %>% select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan") %>% group_by(block_no_chi) %>% dplyr::summarise(., ref_num=n_distinct(uniq_block))
+ 
+ # we create a vector we will use to filter, we filter for blocks in chinese that have all the 10 references, which are about 14329 blocks
+ 
+  chinese_blocks_keep_all_10_pans <- synteny_chinese %>% select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan") %>% group_by(block_no_chi) %>% dplyr::summarise(., ref_num=n_distinct(uniq_block)) %>% filter(ref_num == 10)
+  
+  nrow(chinese_blocks_keep_all_10_pans) # 13,942
+  nrow(num_ref_uniq_per_chin_block) # 277,145
+  
+  # filtering out spelta how many window blocks do we keep?
+  
+    chinese_blocks_keep_all_9_pans <- synteny_chinese %>%  filter(reference != "spelta") %>% select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan") %>% group_by(block_no_chi) %>% dplyr::summarise(., ref_num=n_distinct(uniq_block)) %>% filter(ref_num == 9)
+    
+    nrow(chinese_blocks_keep_all_9_pans) #28,779 window blocks
+ 
+```
+
+The total number of blocks before keeping only those with all the 10 references
+in 277,145 that is reduced down to only 13,942. A significant reduction in the
+number of window blocks. Removing `spelta`, we get 28,779 windows remaining,
+still quite a few compared the total of 277k. Maybe be we remove `spelta`, as it
+has the least number of syntenic windows to Chinese we can keep more windows.
+But just need a position as long as our target region is within it this should
+be okay.
+
+Add a chr column for easy filtering Try using the functions on [this
+page](https://adomingues.github.io/2015/09/24/finding-closest-element-to-a-number-in-a-list/)
+to get closest element to our target.
+
+`substr(chromosome, 1, 5)` takes `chr2B` from `chr2B__chi` — the first five characters are the
+chromosome name for every assembly suffix in the file.
+
+```{r}
+# create a column with chromosome information without the `chi` suffix
+synteny_chinese %<>% mutate(chrom = substr(chromosome,1,5))
+
+```
+
+Optional: save the table at this stage, before the 1 Mb block column is added. Not needed by Part 2.
+
+```{r, eval=FALSE}
+
+#save the file we have made to a csv for easy reference next time
+write.csv(synteny_chinese, file = "01_chinese_pangenome_syntenic_regions_feb082023.csv", quote = F)
+
+synteny_chinese <- read.csv(file = "01_chinese_pangenome_syntenic_regions_feb082023.csv", header = T)
+
+```
+
+## The 100 kb attempt, and why it was abandoned
+
+This chunk is the record of the first approach: search on `start_chi`, the alignment's own start
+coordinate, at 100 kb resolution. The commented block inside it is the logic that survives into the
+final method — filter to the target chromosome, subtract to get the distance from the target,
+keep only non-negative differences, `slice_min` the closest, then convert the pangenome coordinate
+to megabases with `floor` for a start and `ceiling` for an end.
+
+It also sets `target_chrom`, `target_start_pos` and `target_end_pos`, which the next chunk uses.
+Positions here are in **base pairs** (683,000,000), unlike Part 2 where they are in whole megabases.
+
+```{r}
+# how to find an element closet to the the number (which would be our target location) in a vector
+
+target_chrom="chr2B"
+target_start_pos=683000000
+#target_start_pos=150000000
+target_end_pos=687000000
+#target_end_pos=158000000
+
+min_dif <- synteny_chinese %>% filter(chrom == "chr2B") %>% select(start_chi) %>% min(abs(.- target_start_pos))
+
+# below seems to do what we need, 
+# first filter based on target chromosome
+# create a column that subtracts how far all the start positions of the chinese chromes are from the target start/end target position
+# select for only values from above created column that are greater than 0
+# slice the data frame to keep only rows that have the minimum value of difference, so that is based on the minimum value from column filtered above,
+# from the selected rows above, get the target position in the pangenome reference lines, by dividing the corresponding pangenome start position by 1000000 (to get the value to MB), then get the closest whole number i.e round down for start position OR round up for end position
+
+
+# target start position, using the start position of alignment blocks of chinese
+synteny_chinese %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_start_pos - start_chi) %>% filter(min_dif >= 0) %>% slice_min(n = 1, min_dif) %>% mutate( pan_ref_target_pos = floor(start_pan/1000000)) %>% select(reference, uniq_block, pan_ref_target_pos) %>% flextable::flextable()
+
+# target end position
+synteny_chinese %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_end_pos - start_chi) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos = ceiling(start_pan/1000000)) %>% select(reference, uniq_block, pan_ref_target_pos) %>% flextable::flextable()
+
+# above gets the values for references present,
+# ideally if we filter the starting data frame to those blocks in chinese spring that have corresponding sytenic windows from all pangeome lines, we should get postions from all the 10 pangeome lines
+# we filter the starting dataset with the vector list of blocks we created above
+
+# this does not give target positions in all the references,actually it does !! LOL
+
+synteny_chinese %>% filter(block_no_chi %in% chinese_blocks_keep_all_10_pans$block_no_chi) %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_start_pos - start_chi) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos = floor(start_pan/1000000)) %>% select(reference, uniq_block, pan_ref_target_pos) %>% flextable::flextable()
+
+
+# we still have all the blocks having all the references,
+
+synteny_chinese %>% filter(block_no_chi %in% chinese_blocks_keep_all_10_pans$block_no_chi) %>% group_by(chrom, block_no_chi, reference) %>% summarise(., ref_num=n_distinct(reference)) %>% print(n=10) %>% flextable::flextable()
+
+```
+
+Maybe rather than use the start position in calculating the closest position, we
+should use the start position of the block This is the value we used to keep all
+the references, so the difference in value that we use to keep out final data
+will also be the same
+
+How to cut the block value to just the start position that we want We use the
+command `separate_wider_delim` first separate based on the `:` then on the `-`
+to get start and end positions of the block
+
+**This chunk is required by everything below it** — `separate_wider_delim` splits
+`chr2B__chi:683000001-683100000` on `:` and then on `-` to create `block_start` and `block_end`, and
+`block_start` is what the 1 Mb column is derived from. The searches that follow it are the same
+comparison again, now anchored on the block start rather than the alignment start.
+
+```{r}
+synteny_chinese %<>% separate_wider_delim(cols = block_no_chi, delim = ":", names = c(NA, "block_cord"), cols_remove = F) %>% separate_wider_delim(block_cord, delim = "-", names = c("block_start", "block_end"))
+
+# re-try with block start position, we have all the panrefs, great
+
+synteny_chinese %>% filter(block_no_chi %in% chinese_blocks_keep_all_10_pans$block_no_chi) %>% group_by(chrom, block_no_chi, reference) %>% summarise(., ref_num=n_distinct(reference)) %>% print(n=20) %>% flextable::flextable()
+
+# convert block start position to numeric in order to use it in the subtraction to get the closest postion
+synteny_chinese$block_start <- as.numeric(as.vector(unlist(synteny_chinese$block_start))) 
+
+# target start position
+
+synteny_chinese %>% filter(block_no_chi %in% chinese_blocks_keep_all_9_pans$block_no_chi) %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_start_pos - block_start) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos_start = floor(start_pan/1000000)) %>% select(reference, uniq_block, pan_ref_target_pos_start) %>% flextable::flextable()
+
+# target end position
+
+synteny_chinese %>% filter(block_no_chi %in% chinese_blocks_keep_all_9_pans$block_no_chi) %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_end_pos - block_start) %>% filter(min_dif <= 0) %>% slice_max(n =1, min_dif) %>% mutate( pan_ref_target_pos_end = ceiling(start_pan/1000000)) %>% select(reference, uniq_block, pan_ref_target_pos_end) %>% flextable::flextable()
+
+#============== without filtering 
+
+# target start position
+
+synteny_chinese %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_start_pos - block_start) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos_start = floor(start_pan/1000000)) %>% select(reference, uniq_block, pan_ref_target_pos_start) %>% flextable::flextable()
+
+# target end position
+
+synteny_chinese %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_end_pos - block_start) %>% filter(min_dif <= 0) %>% slice_max(n =1, min_dif) %>% mutate( pan_ref_target_pos_end = ceiling(start_pan/1000000)) %>% select(reference, uniq_block, pan_ref_target_pos_end) %>% flextable::flextable()
+
+```
+
+When we use the whole data set, without filtering for windows where all the
+references are present, we get positions closer to our target region when we are
+using the *Yr7* coordinates, (whether using `start_chi` or `block_start` as the
+`min_dif` value). But for the same region, using filtered data, the closest
+value is region at 644Mb!!
+
+As its a one liner that gets the positions, we might to use either data set
+based on the target region.
+
+#### Catch-up meeting 13th Feb
+
+After discussions on what we have so far, a few things to take note of:
+
+-   the blocks of chinese we are using to select from are every 100kb
+    (100,000bp) which makes them too small as a filter to have all the
+    references therein
+
+-   probably is the reason the closest regions to our targets end up being so
+    far.
+
+-   suggestion is to have a block that is 1MB, like those used in the the affinity
+    propagation pipeline,
+
+-   If a panref is not available, or they are too far, alternative is to get the
+    closest region for each reference.
+
+## The 1 Mb anchor
+
+To do this we can create a block column for every 1MB based on the start
+position of the block based on chinese, which is still okay because in the end
+we return the value based on the reference. We use the created block, and create
+a new column combined with the chr so we have uniq 1MB block for each
+chromosome. We use this to group and then filter
+
+`floor(block_start / 1000000)` assigns every alignment to a Chinese Spring megabase and
+`block_per_chr_MB` makes the chromosome-plus-megabase label (`chr5B_6`) that Part 2 searches on.
+Coarsening the anchor from 100 kb to 1 Mb is what makes the filter workable: **10,855** of the
+**14,068** 1 Mb blocks carry nine or more references, against 13,942 of 277,145 at 100 kb.
+
+Two filter vectors are built - nine or more references (tolerating one absence, usually spelta) and
+the stricter ten — so the effect of the threshold on a chosen boundary block can be compared. Note
+that no filtering is applied to the saved table itself; it keeps every alignment, and the vectors
+are rebuilt when needed in Part 2.
+
+```{r}
+# convert block start into a number
+synteny_chinese$block_start <- as.numeric(as.vector(unlist(synteny_chinese$block_start)))
+str(synteny_chinese)
+
+# new df with the MB and block uniq columns
+synteny_chinese_MB_blocks <- 
+  synteny_chinese %>% mutate(block_per_MB = floor(block_start / 1000000)) %>% mutate(block_per_chr_MB = paste0(chrom, "_", block_per_MB)) 
+
+synteny_chinese_MB_blocks %>% select(block_per_chr_MB) %>% unique() #%>% DT::datatable()
+
+# next group and filter as above
+
+# group by the MB blocks then count the number of references in each 1MB block
+#  yields a total of 14,068 1MB blocks based in the chinese spring genome, 
+# confirm with the chromosome blocks we got in the work counting the number of NLRs per chromosome
+synteny_chinese_MB_blocks %>%  select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan", "block_per_chr_MB") %>% group_by(block_per_chr_MB) %>% dplyr::summarise(., ref_num=n_distinct(reference)) %>% DT::datatable()
+
+# create a vector we will use to filter for rows with 9 or more references, so that we have blocks that have all the 10 or missing 1, which will most likely be spelta
+
+chinese_MB_blocks_keep_all_9_pans <- synteny_chinese_MB_blocks %>%  select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan", "block_per_chr_MB") %>% group_by(block_per_chr_MB) %>% dplyr::summarise(., ref_num=n_distinct(reference)) %>% filter(ref_num >= 9) 
+
+# or all ten just for testing 
+chinese_MB_blocks_keep_all_10_pans <- synteny_chinese_MB_blocks %>%  select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan", "block_per_chr_MB") %>% group_by(block_per_chr_MB) %>% dplyr::summarise(., ref_num=n_distinct(reference)) %>% filter(ref_num >= 10) 
+  
+nrow(chinese_MB_blocks_keep_all_9_pans) # out of a total 14,068 MB blocks we keep 10,855 that's much better
+
+str(synteny_chinese_MB_blocks)
+ 
+```
+
+Grouping the data by 1MB blocks yields **14,068** blocks. 
+
+Save the data after new column of block added
+
+This is the file Part 2 reads. `write.csv` keeps the row names, so on reading the table back there
+is an extra leading column, `X`.
+
+```{r, eval=FALSE}
+
+#save the file we have made to a csv for easy reference next time
+write.csv(synteny_chinese_MB_blocks, file = "02_chinese_pangenome_syntenic_regions_MB_Blocks_March-07-2023.csv", quote = F)
+
+synteny_chinese_MB_blocks <- read.csv("~/Documents/2022/kmc_IBSpy_AP/10wheatgenomes_mummer_conversions/2026-Oct_syntenicMappingOutputs/02_chinese_pangenome_syntenic_regions_MB_Blocks_March-07-2023.csv")
+
+```
 
 # Part 2: extract syntenic positions
 
-Set the Chinese Spring target interval below. The main search uses 1 Mb blocks shared by all but at most one pangenome. A reference-specific search is used when a reference is missing from a shared boundary block or when both shared boundaries collapse to the same rounded pangenome position.
+Set the Chinese Spring target interval below. The main search uses 1 Mb blocks shared by all but at
+most one pangenome. A reference-specific search is used when a reference is missing from a shared
+boundary block or when both shared boundaries collapse to the same rounded pangenome position.
+
+**The logic of this part.** The target interval is given in Chinese Spring megabases. For its start,
+the search keeps the 1 Mb anchor blocks at or *before* the target start and takes the nearest one;
+for its end, the blocks at or *after* the target end, nearest one again. The interval handed to
+IBSpy therefore always brackets the region of interest rather than cutting into it. Reading the
+pangenome coordinate off those two anchor blocks, for each reference in turn, gives one syntenic
+start and one syntenic end per assembly — the `ref_up_down_dict` that Part 1 of the IBSpyHelper
+notebook consumes.
+
+Part 2 is written to run on its own in a fresh session, so it reloads the libraries and rebuilds the
+filter vectors rather than relying on Part 1 still being in memory.
+
+Set the working directory
+
+```{r setup-part2, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F)
+
+work_dir="/Users/waweru/Documents/2022/IBSpy_Targets/2024-12-05_5B_Yellow_Rust/2025-01-09_HaplotypeAnalysis/"
+
+setwd(paste0(work_dir))
+#To render the document into word, am referring to the [quarto.org](https://quarto.org/docs/output-formats/ms-word.html) guidelines.
+
+##====== data being used here =======
+
+synteny_chinese_MB_blocks_data <- "/Users/waweru/Documents/2022/kmc_IBSpy_AP/10wheatgenomes_mummer_conversions/2026-Oct_syntenicMappingOutputs/02_chinese_pangenome_syntenic_regions_MB_Blocks_March-07-2023.csv"
+```
+
+`work_dir` is where the Word output is written; it is also the folder this part of the analysis was
+developed in. The path is used explicitly in `paste0()` when saving, so the export does not depend
+on the `setwd()` call.
+
+`synteny_chinese_MB_blocks_data` is the absolute path of the file Part 1 saves.
+
+import libraries
 
 ```{r}
-target_chrom <- "chr2D"
-target_start_bp <- 635599182
-target_end_bp <- 650840934
-allowed_missing_references <- 2
+library(tidyverse)
+library(magrittr)
+library(flextable)
 
-target_start_block <- floor(target_start_bp / 1000000)
-target_end_block <- ceiling(target_end_bp / 1000000)
-
-synteny_1Mb <- read_tsv(
-  mapping_file,
-  show_col_types = FALSE,
-  progress = TRUE
-)
-
-target_mapping <- synteny_1Mb %>%
-  filter(chrom == target_chrom)
-
-if (nrow(target_mapping) == 0) {
-  stop("No mappings were found for ", target_chrom, ".")
-}
-
-required_columns <- c(
-  "reference", "block_per_MB", "chromosome_pan",
-  "representative_pan_start_bp"
-)
-
-if (!all(required_columns %in% names(target_mapping))) {
-  stop("Part 1 must be rerun before running the revised Part 2.")
-}
-
-all_references <- target_mapping %>%
-  distinct(reference)
-
-minimum_shared_references <- max(
-  nrow(all_references) - allowed_missing_references,
-  1
-)
-
-# Identify the common Chinese Spring blocks used for the main search.
-shared_blocks <- target_mapping %>%
-  distinct(block_per_MB, reference) %>%
-  count(block_per_MB, name = "reference_count") %>%
-  filter(reference_count >= minimum_shared_references)
-
-shared_start_block <- shared_blocks %>%
-  filter(block_per_MB <= target_start_block) %>%
-  slice_max(block_per_MB, n = 1, with_ties = FALSE) %>%
-  pull(block_per_MB)
-
-shared_end_block <- shared_blocks %>%
-  filter(block_per_MB >= target_end_block) %>%
-  slice_min(block_per_MB, n = 1, with_ties = FALSE) %>%
-  pull(block_per_MB)
-
-if (length(shared_start_block) == 0 || length(shared_end_block) == 0) {
-  stop("Suitable shared start and end blocks were not found.")
-}
-
-message(
-  "Shared CS anchors: ", shared_start_block, "-", shared_end_block,
-  " Mb; minimum references per block: ", minimum_shared_references
-)
-
-# Extract the start and end positions from the shared blocks.
-shared_start_positions <- target_mapping %>%
-  filter(block_per_MB == shared_start_block) %>%
-  transmute(
-    reference,
-    start_cs_block_mb = block_per_MB,
-    start_pan_chromosome = chromosome_pan,
-    start_boundary_bp = floor(
-      representative_pan_start_bp / 1000000
-    ) * 1000000,
-    start_source = "Shared CS block"
-  )
-
-shared_start_positions
-
-shared_end_positions <- target_mapping %>%
-  filter(block_per_MB == shared_end_block) %>%
-  transmute(
-    reference,
-    end_cs_block_mb = block_per_MB,
-    end_pan_chromosome = chromosome_pan,
-    end_boundary_bp = ceiling(
-      representative_pan_start_bp / 1000000
-    ) * 1000000,
-    end_source = "Shared CS block"
-  )
-
-shared_end_positions
-
-# Retain shared results only when they define a valid interval.
-shared_position_pairs <- full_join(
-  shared_start_positions,
-  shared_end_positions,
-  by = "reference"
-)
-
-valid_shared_pairs <- shared_position_pairs %>%
-  filter(
-    !is.na(start_boundary_bp),
-    !is.na(end_boundary_bp),
-    start_pan_chromosome == end_pan_chromosome,
-    start_boundary_bp != end_boundary_bp
-  )
-
-valid_shared_pairs
-
-# Missing, conflicting or collapsed results are searched independently.
-fallback_references <- all_references %>%
-  anti_join(valid_shared_pairs, by = "reference")
-
-if (nrow(fallback_references) > 0) {
-  message(
-    "Independent fallback search: ",
-    paste(fallback_references$reference, collapse = ", ")
-  )
-}
-
-fallback_start_candidates <- target_mapping %>%
-  semi_join(fallback_references, by = "reference") %>%
-  filter(block_per_MB <= target_start_block) %>%
-  transmute(
-    reference,
-    start_cs_block_mb = block_per_MB,
-    start_pan_chromosome = chromosome_pan,
-    start_boundary_bp = floor(
-      representative_pan_start_bp / 1000000
-    ) * 1000000,
-    start_distance = target_start_block - block_per_MB
-  )
-
-fallback_end_candidates <- target_mapping %>%
-  semi_join(fallback_references, by = "reference") %>%
-  filter(block_per_MB >= target_end_block) %>%
-  transmute(
-    reference,
-    end_cs_block_mb = block_per_MB,
-    end_pan_chromosome = chromosome_pan,
-    end_boundary_bp = ceiling(
-      representative_pan_start_bp / 1000000
-    ) * 1000000,
-    end_distance = block_per_MB - target_end_block
-  )
-
-# Choose the closest pair that maps to one chromosome and has two boundaries.
-fallback_pairs <- inner_join(
-  fallback_start_candidates,
-  fallback_end_candidates,
-  by = "reference"
-) %>%
-  filter(
-    start_pan_chromosome == end_pan_chromosome,
-    start_boundary_bp != end_boundary_bp
-  ) %>%
-  mutate(
-    anchor_distance = start_distance + end_distance,
-    interval_width_bp = abs(end_boundary_bp - start_boundary_bp)
-  ) %>%
-  group_by(reference) %>%
-  slice_min(anchor_distance, n = 1, with_ties = TRUE) %>%
-  slice_min(interval_width_bp, n = 1, with_ties = FALSE) %>%
-  ungroup() %>%
-  transmute(
-    reference,
-    start_cs_block_mb,
-    start_pan_chromosome,
-    start_boundary_bp,
-    start_source = "Reference-specific fallback",
-    end_cs_block_mb,
-    end_pan_chromosome,
-    end_boundary_bp,
-    end_source = "Reference-specific fallback"
-  )
-
-selected_position_pairs <- bind_rows(
-  valid_shared_pairs,
-  fallback_pairs
-)
-
-selected_position_pairs
-
-# Combine the selected positions into one interval per reference.
-syntenic_positions <- all_references %>%
-  left_join(selected_position_pairs, by = "reference") %>%
-  mutate(
-    chromosome_match = (
-      !is.na(start_pan_chromosome) &
-      !is.na(end_pan_chromosome) &
-      start_pan_chromosome == end_pan_chromosome
-    ),
-    pangenome_chromosome = case_when(
-      chromosome_match ~ sub("__.*$", "", start_pan_chromosome),
-      is.na(start_pan_chromosome) ~ sub("__.*$", "", end_pan_chromosome),
-      is.na(end_pan_chromosome) ~ sub("__.*$", "", start_pan_chromosome),
-      TRUE ~ paste(
-        sub("__.*$", "", start_pan_chromosome),
-        sub("__.*$", "", end_pan_chromosome),
-        sep = " / "
-      )
-    ),
-    syntenic_start_bp = if_else(
-      chromosome_match,
-      pmin(start_boundary_bp, end_boundary_bp),
-      NA_real_
-    ),
-    syntenic_end_bp = if_else(
-      chromosome_match,
-      pmax(start_boundary_bp, end_boundary_bp),
-      NA_real_
-    ),
-    interval_size_bp = syntenic_end_bp - syntenic_start_bp + 1,
-    Notes = case_when(
-      is.na(start_cs_block_mb) | is.na(end_cs_block_mb) ~
-        "No valid start-end pair was recovered",
-      !chromosome_match ~
-        "Start and end anchors mapped to different chromosomes",
-      start_source == "Reference-specific fallback" |
-        end_source == "Reference-specific fallback" ~
-        paste0(
-          "Reference-specific fallback; CS anchors: ",
-          start_cs_block_mb, "-", end_cs_block_mb, " Mb"
-        ),
-      TRUE ~ ""
-    ),
-    Genome = recode(
-      reference,
-      arinalrfor = "ArinaLrFor",
-      jagger = "Jagger",
-      julius = "Julius",
-      lancer = "Lancer",
-      landmark = "Landmark",
-      mace = "Mace",
-      norin61 = "Norin 61",
-      stanley = "Stanley",
-      sy_mattis = "SY Mattis",
-      .default = str_to_title(str_replace_all(reference, "_", " "))
-    )
-  ) %>%
-  transmute(
-    Genome,
-    Chromosome = pangenome_chromosome,
-    syntenic_start_bp,
-    syntenic_end_bp,
-    interval_size_bp,
-    Notes
-  )
-
-# Add the original Chinese Spring interval to the combined table.
-chinese_spring_position <- tibble(
-  Genome = "Chinese Spring",
-  Chromosome = target_chrom,
-  syntenic_start_bp = target_start_bp,
-  syntenic_end_bp = target_end_bp,
-  interval_size_bp = target_end_bp - target_start_bp + 1,
-  Notes = ""
-)
-
-final_table <- bind_rows(
-  chinese_spring_position,
-  syntenic_positions
-) %>%
-  arrange(desc(Genome == "Chinese Spring"), Genome) %>%
-  rename(
-    "Syntenic start (bp)" = syntenic_start_bp,
-    "Syntenic end (bp)" = syntenic_end_bp,
-    "Interval size (bp)" = interval_size_bp
-  )
-
-# Remove the Notes column when no warnings are present.
-if (all(final_table$Notes == "")) {
-  final_table <- select(final_table, -Notes)
-}
-
-final_tsv <- file.path(
-  output_dir,
-  "02_chr2D_635599182-650840934_syntenic_positions.tsv"
-)
-
-final_docx <- file.path(
-  output_dir,
-  "02_chr2D_635599182-650840934_syntenic_positions.docx"
-)
-
-write_tsv(final_table, final_tsv, na = "")
-
-table_caption <- paste0(
-  "Syntenic positions corresponding to the Chinese Spring RefSeq v1.0 ",
-  target_chrom, " interval ",
-  scales::comma(target_start_bp), "-", scales::comma(target_end_bp),
-  " across wheat pangenome assemblies."
-)
-
-thesis_table <- final_table %>%
-  flextable() %>%
-  set_caption(caption = table_caption) %>%
-  theme_booktabs() %>%
-  bold(part = "header") %>%
-  colformat_num(
-    j = c(
-      "Syntenic start (bp)",
-      "Syntenic end (bp)",
-      "Interval size (bp)"
-    ),
-    big.mark = ",",
-    digits = 0,
-    na_str = ""
-  ) %>%
-  align(j = "Genome", align = "left", part = "all") %>%
-  autofit() %>%
-  set_table_properties(layout = "autofit")
-
-save_as_docx(
-  values = list("Syntenic positions" = thesis_table),
-  path = final_docx
-)
-
-message("Saved the final table to: ", final_tsv)
-message("Saved the Word table to: ", final_docx)
-
-thesis_table
+# set defaults for printing tables
+set_flextable_defaults(
+  font.family = "Arial", font.size = 5, 
+  border.color = "blue", text.align = "center")
 ```
+
+###=======================
+#==========================================
+
+Getting the synteny blocks for 5B:6-9 Mb region based on Chinese spring v1.0, got syntenic regions for all the pangenomes, all looking pretty decent.
+
+#### import the data we use
+
+The columns used below are `reference`, `chrom`, `block_per_MB`, `block_per_chr_MB` and `start_pan`
+— the pangenome coordinate of the alignment, and the block labels to search on.
+
+```{r}
+synteny_chinese_MB_blocks <- read.csv(synteny_chinese_MB_blocks_data)
+```
+
+If needed, the vectors for filtering blocks with all 9/10 references present
+
+The same two vectors built at the end of Part 1, rebuilt here from the loaded file. Requiring a
+block to be present in at least 9 of the 10 references keeps the anchors that are consistent
+genome-wide while tolerating the one assembly most often missing — usually *spelta*. The `>= 10`
+version is the stricter test.
+
+Each vector is a list of `block_per_chr_MB` labels, used with `%in%` to subset the table in the
+chunks that follow.
+
+```{r}
+# create a vector we will use to filter for rows with 9 or more references, so that we have blocks that have all the 10 or missing 1, which will most likely be spelta
+
+chinese_MB_blocks_keep_all_9_pans <- synteny_chinese_MB_blocks %>%  select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan", "block_per_chr_MB") %>% group_by(block_per_chr_MB) %>% dplyr::summarise(., ref_num=n_distinct(reference)) %>% filter(ref_num >= 9) 
+
+# or all ten just for testing 
+chinese_MB_blocks_keep_all_10_pans <- synteny_chinese_MB_blocks %>%  select("assembly","reference","uniq_block","chromosome","start_chi", "end_chi","block_no_chi","chromosome_pan","start_pan", "end_pan", "block_per_chr_MB") %>% group_by(block_per_chr_MB) %>% dplyr::summarise(., ref_num=n_distinct(reference)) %>% filter(ref_num >= 10) 
+```
+
+Checking that we are extracting the correct rows from the data,
+
+This chunk is the sanity check before the real extraction: each boundary is computed **three ways**
+— the full row as an interactive `DT` table so every column can be inspected, then the trimmed
+output with the ≥9-reference filter applied, then the same without it. Comparing the filtered and
+unfiltered versions shows whether the reliability filter has moved the boundary block, and which
+references drop out when it is applied.
+
+How a boundary is found, in the pipeline below:
+
+- `mutate(min_dif = target_start_pos - block_per_MB)` then `filter(min_dif >= 0)` keeps only blocks
+  at or before the target start; `slice_min(min_dif)` takes the closest one. For the end the
+  subtraction is reversed (`block_per_MB - target_end_pos`), keeping blocks at or after the target
+  end.
+- `floor(start_pan/1000000)` for the start and `ceiling(start_pan/1000000)` for the end round the
+  pangenome coordinate outwards, again so the interval brackets rather than clips the target.
+- `group_by(reference) %>% slice(1)` keeps one row per reference, since the saved table holds every
+  alignment and a block can carry several for the same assembly.
+
+The `min_dif` object assigned on the first line is a leftover from working out this logic in Part 1
+and is not used by anything downstream — the comparison that matters is the `min_dif` column created
+inside each pipeline.
+
+```{r}
+ # the block numbers here are in in MB, and so our target position will also need to be in MBs
+
+target_chrom="chr5B"
+target_start_pos=6
+target_end_pos=9
+min_dif <- synteny_chinese_MB_blocks %>% filter(chrom == target_chrom) %>% select(start_chi) %>% min(abs(.- target_start_pos))
+
+#========= target start position
+
+# checking without the filter for number of panrefs per block
+synteny_chinese_MB_blocks   %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_start_pos - block_per_MB) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos_start = floor(start_pan/1000000)) %>% group_by(reference) %>% slice(1) %>% DT::datatable()
+
+# then output the just the data we want
+
+synteny_chinese_MB_blocks %>% filter(block_per_chr_MB %in% chinese_MB_blocks_keep_all_9_pans$block_per_chr_MB) %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_start_pos - block_per_MB) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos_start = floor(start_pan/1000000)) %>% group_by(reference) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_start) %>% slice(1) %>% flextable::flextable()
+
+# without the filter for panrefs in every block
+
+synteny_chinese_MB_blocks %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_start_pos - block_per_MB) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos_start = floor(start_pan/1000000)) %>% group_by(reference) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_start) %>% slice(1) %>% flextable::flextable()
+
+## ============ target end region
+# for clarity,
+# here we select for min_dif values that are 0 or less, because we want values greater than our target end position, scrap this¡¡
+# instead we just do the block_mb - target position,so that if the block mb is greater we get a positive value, which is what we want essentially, then we still filter for positive values and slice the least min-dif value
+
+
+# checking, without the filter for number of panrefs per block
+synteny_chinese_MB_blocks %>% filter(chrom == target_chrom ) %>% mutate(min_dif = block_per_MB - target_end_pos) %>% filter(min_dif >= 0) %>% slice_min(n = 1, min_dif) %>% mutate( pan_ref_target_pos_end = ceiling(start_pan/1000000)) %>% group_by(reference) %>% slice(1) %>% DT::datatable()
+
+# then output the target data
+
+synteny_chinese_MB_blocks %>% filter(block_per_chr_MB %in% chinese_MB_blocks_keep_all_9_pans$block_per_chr_MB) %>% filter(chrom == target_chrom ) %>% mutate(min_dif = block_per_MB - target_end_pos) %>% filter(min_dif >= 0) %>% slice_min(n = 1, min_dif) %>% mutate( pan_ref_target_pos_end = ceiling(start_pan/1000000)) %>% group_by(reference) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_end) %>% slice(1) %>% flextable::flextable()
+
+# without the filter of panrefs in every block
+
+synteny_chinese_MB_blocks %>% filter(chrom == target_chrom ) %>% mutate(min_dif = block_per_MB - target_end_pos) %>% filter(min_dif >= 0) %>% slice_min(n = 1, min_dif) %>% mutate( pan_ref_target_pos_end = ceiling(start_pan/1000000)) %>% group_by(reference) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_end) %>% slice(1) %>% flextable::flextable()
+
+# first check that we are getting the correct data
+synteny_chinese_MB_blocks %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_start_pos - block_per_MB) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos_start = floor(start_pan/1000000)) %>% group_by(reference) %>% slice(1) %>% DT::datatable()
+
+```
+
+Then extracting for the start and end position and combining it to output in a neat table
+
+The same two searches are run again and `full_join`ed on `reference`, giving one row per assembly
+with both ends of the interval. `full_join` rather than an inner join so that a reference present at
+only one of the two boundaries still appears, with `NA` at the other — that missing value is the
+signal to run the per-reference chunk below. The columns are then renamed for the Word table and
+exported with `save_as_docx()` to a filename built from the genome, chromosome and interval.
+
+```{r}
+genome="chinese"
+target_chrom="chr5B"
+target_start_pos=6
+target_end_pos=9
+min_dif <- synteny_chinese_MB_blocks %>% filter(chrom == target_chrom) %>% select(start_chi) %>% min(abs(.- target_start_pos))
+
+## to get the start position
+synteny_chinese_MB_blocks %>% filter(block_per_chr_MB %in% chinese_MB_blocks_keep_all_9_pans$block_per_chr_MB) %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_start_pos - block_per_MB) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos_start = floor(start_pan/1000000)) %>% group_by(reference) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_start) %>% slice(1) %>% flextable::flextable()
+
+# to get the end position,
+
+synteny_chinese_MB_blocks %>% filter(block_per_chr_MB %in% chinese_MB_blocks_keep_all_9_pans$block_per_chr_MB) %>% filter(chrom == target_chrom ) %>% mutate(min_dif = block_per_MB - target_end_pos) %>% filter(min_dif >= 0) %>% slice_min(n = 1, min_dif) %>% mutate( pan_ref_target_pos_end = ceiling(start_pan/1000000)) %>% group_by(reference) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_end) %>% slice(1) %>% flextable::flextable()
+
+# can we merge the two?
+
+start_end_mgd <- full_join((synteny_chinese_MB_blocks %>% filter(block_per_chr_MB %in% chinese_MB_blocks_keep_all_9_pans$block_per_chr_MB) %>% filter(chrom == target_chrom ) %>% mutate(min_dif = target_start_pos - block_per_MB) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos_start = floor(start_pan/1000000)) %>% group_by(reference) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_start) %>% slice(1)), 
+                              (synteny_chinese_MB_blocks %>% filter(block_per_chr_MB %in% chinese_MB_blocks_keep_all_9_pans$block_per_chr_MB) %>% filter(chrom == target_chrom ) %>% mutate(min_dif = block_per_MB - target_end_pos) %>% filter(min_dif >= 0) %>% slice_min(n = 1, min_dif) %>% mutate( pan_ref_target_pos_end = ceiling(start_pan/1000000)) %>% group_by(reference) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_end) %>% slice(1)), 
+                              by = "reference", multiple = "all") 
+
+# make better names for final output
+
+headers_start_end_merged <- names(start_end_mgd)
+
+headers_start_end_merged <- c("reference",	"CS block start",	"PANG block start position",	"PANG position start",	"CS block end",	"PANG block end",	"PANG position end")
+
+names(start_end_mgd) <- headers_start_end_merged
+
+flextable::flextable(start_end_mgd)
+
+# export to word
+
+flextable::flextable(start_end_mgd) %>% save_as_docx(path = paste0(work_dir,genome,"-",target_chrom,"_",target_start_pos,"-",target_end_pos,"Mb_syntenic_regions_panrefs.docx"))
+
+```
+
+ For  a particular reference
+
+**When this chunk is needed.** Two situations: a reference missing from one of the shared boundary
+blocks (`NA` in the joined table — `landmark` and `mace` here), or a reference whose start and end both round
+to the same pangenome megabase, which would give a zero-length interval. Dropping the
+≥9-reference filter for that one assembly lets it use its own nearest available block instead,
+accepting a slightly less well-supported anchor in exchange for a usable coordinate.
+
+The rescued row is renamed with the same headers and `rbind`ed onto `start_end_mgd`, and the Word
+file is re-exported so it contains the complete set. Change `ref` and re-run for each reference that
+needs it. Note that `rbind` appends unconditionally: re-running this chunk without rebuilding
+`start_end_mgd` from the chunk above will add the same row twice.
+
+```{r}
+
+ref <- "mace"
+#ref <- "landmark"
+
+#target start position
+# without the filter for panrefs in every block
+
+synteny_chinese_MB_blocks %>% filter(chrom == target_chrom ) %>% filter(reference == ref) %>% mutate(min_dif = target_start_pos - block_per_MB) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos_start = floor(start_pan/1000000)) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_start) %>% slice(1) %>% flextable::flextable()
+
+#target end position
+# without the filter of panrefs in every block
+
+synteny_chinese_MB_blocks %>% filter(chrom == target_chrom ) %>% filter(reference == ref) %>% mutate(min_dif = block_per_MB - target_end_pos) %>% filter(min_dif >= 0) %>% slice_min(n = 1, min_dif) %>% mutate( pan_ref_target_pos_end = ceiling(start_pan/1000000)) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_end) %>% slice(1) %>% flextable::flextable()
+
+
+missing_ref_pos <- full_join(synteny_chinese_MB_blocks %>% filter(chrom == target_chrom ) %>% filter(reference == ref) %>% mutate(min_dif = target_start_pos - block_per_MB) %>% filter(min_dif >= 0) %>% slice_min(n =1, min_dif) %>% mutate( pan_ref_target_pos_start = floor(start_pan/1000000)) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_start) %>% slice(1), synteny_chinese_MB_blocks %>% filter(chrom == target_chrom ) %>% filter(reference == ref) %>% mutate(min_dif = block_per_MB - target_end_pos) %>% filter(min_dif >= 0) %>% slice_min(n = 1, min_dif) %>% mutate( pan_ref_target_pos_end = ceiling(start_pan/1000000)) %>% select(reference, block_per_chr_MB, start_pan, pan_ref_target_pos_end) %>% slice(1), by = "reference")
+
+
+# make better names for final output
+
+names(missing_ref_pos) <- headers_start_end_merged
+
+flextable::flextable(missing_ref_pos)
+
+# bind to already existing data frame
+
+start_end_mgd <- rbind(start_end_mgd, missing_ref_pos) 
+
+flextable::flextable(start_end_mgd)
+
+# export to word
+
+flextable::flextable(start_end_mgd) %>% save_as_docx(path = paste0(work_dir,genome,"-",target_chrom,"_",target_start_pos,"-",target_end_pos,"Mb_syntenic_regions_panrefs.docx"))
+
+```
+
+How can we make the content of table like results more presentable? [Useful
+page](https://rfortherestofus.com/2019/11/how-to-make-beautiful-tables-in-r/)
+
+The same final table in three renderings — `DT` for interactive sorting in the HTML output,
+`kableExtra` for a static one, `flextable` for the version that exports cleanly to Word.
+
+```{r}
+sessioninfo::session_info()
+
+```
+
+# Notes for re-running
+
+**To run this on a new target interval** (the usual case): run the two setup chunks and Part 2 only,
+changing `target_chrom`, `target_start_pos` and `target_end_pos`. Part 1 does not need re-running
+unless the underlying MUMmer alignments change. Part 2's positions are in **whole megabases**,
+matching the `block_per_MB` anchors; Part 1's exploratory chunks use base pairs.
+
+**To rebuild the mapping table from scratch:** run the terminal chunks, then Part 1 interactively
+(see the working-directory warning), then set `eval: true` on the two save chunks. The saved file
+keeps the March 2023 name, so either keep that name or update the path in Part 2's setup chunk.
+
