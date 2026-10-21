@@ -1,0 +1,404 @@
+---
+title: "Custom Riparian thesis plot"
+author: "Bernice-N-Waweru"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd("/Users/waweru/Documents/2022/IBSpy_Targets/2024-12-05_5B_Yellow_Rust/2025-07-02_Watkins_assemblies/all2all/2026-July-09_customRiparianPlots")
+```
+
+Load tools 
+
+```{r}
+library(tidyverse)
+library(rtracklayer)
+library(ggplot2)
+library(gggenes)
+library(ggforce)
+library(stringr)
+library(magrittr)
+```
+
+#===============================================================================
+# 1. Read Input Data and Standardise PAF column names
+#===============================================================================
+
+```{r readData}
+fullDat <- readxl::read_xlsx("../all_vs_allNLRGeneSeqs_chr5B_Loc1_17PGs+Tsn1_with_identity.xlsx", sheet = 4, col_names = TRUE)
+```
+
+
+```{r}
+glimpse(fullDat)
+```
+
+Check that we don't have any duplicate col names
+
+```{r}
+names(fullDat)
+nrow(fullDat)
+```
+
+rename required useful columns
+
+```{r}
+paf <- fullDat %>% dplyr::rename(
+    qname = query_name,
+    tname = target_name,
+    pid = alignment_identity_percent,
+    qcov_percent = query_coverage_percent,
+    tcov_percent = target_coverage_percent,
+    reciprocal_cov_percent = reciprocal_coverage_percent) 
+```
+
+
+```{r}
+paf %<>% dplyr::mutate(
+    qcov = qcov_percent / 100,
+    tcov = tcov_percent / 100,
+    reciprocal_cov = reciprocal_cov_percent / 100,
+    class = case_when(
+      pid == 100 & qcov >= 0.99 & tcov >= 0.99 ~ "identical",
+      pid >= 99  & qcov >= 0.99 & tcov >= 0.99 ~ "similar",
+      pid >= 85  & qcov >= 0.85 & tcov >= 0.85 ~ "partial",
+      TRUE ~ "weak"))
+```
+
+#===============================================================================
+# 2. Build gene lookup tables from orthogroup assignment table
+#===============================================================================
+Read in the gene table
+
+```{r}
+nlrDat <- readxl::read_xlsx("2026_July_09_allGenomesNLRGenes.xlsx", sheet = 1, col_names = T)
+glimpse(nlrDat)
+```
+
+Make gene order from existing coordinates
+```{r}
+# Make gene order from existing coordinates
+nlrDat2 <- nlrDat %>%
+  mutate(
+    gene_start = as.numeric(gene_start),
+    gene_end   = as.numeric(gene_end)
+  ) %>%
+  group_by(genome) %>%
+  arrange(gene_start, gene_end, .by_group = TRUE) %>%
+  mutate(geneorder = row_number()) %>%
+  ungroup()
+```
+
+
+```{r}
+gene_lookup1 <- nlrDat2 %>%
+  dplyr::rename(
+    gene1 = geneID,
+    genome1 = genome,
+    gene_chrom1 = gene_chrom,
+    gene_start1 = gene_start,
+    gene_end1 = gene_end,
+    geneorder1 = geneorder,
+    gene_strand1 = gene_strand,
+    orthogroup1 = orthogroup
+  )
+
+gene_lookup2 <- nlrDat2 %>%
+  dplyr::rename(
+    gene2 = geneID,
+    genome2 = genome,
+    gene_chrom2 = gene_chrom,
+    gene_start2 = gene_start,
+    gene_end2 = gene_end,
+    gene_strand2 = gene_strand,
+    geneorder2 = geneorder,
+    orthogroup2 = orthogroup
+  )
+```
+
+Focal genome
+```{r}
+focal_genome <- "WATDE0042"
+```
+
+#===============================================================================
+# 3. Attach genome/orthogroup information to PAF hits
+#===============================================================================
+
+
+remove the LC genes from Kariega
+
+```{r}
+paf <- paf %>%
+  dplyr::filter(
+    !(stringr::str_detect(qname, "KAR") & stringr::str_detect(qname, "LC")),
+    !(stringr::str_detect(tname, "KAR") & stringr::str_detect(tname, "LC"))
+  )
+
+nrow(paf)
+```
+
+
+```{r}
+
+hits0 <- paf %>%
+  filter(qname != tname) %>%
+  inner_join(gene_lookup1, by = c("qname" = "gene1")) %>%
+  inner_join(gene_lookup2, by = c("tname" = "gene2")) %>%
+  filter(
+    !is.na(orthogroup1),
+    !is.na(orthogroup2),
+    orthogroup1 == orthogroup2
+  ) %>%
+  mutate(
+    orthogroup = orthogroup1,
+    direction_id = paste(qname, tname, sep = "__"),
+    reverse_id   = paste(tname, qname, sep = "__"),
+    pair_id = map2_chr(
+      qname,
+      tname,
+      ~ paste(sort(c(.x, .y)), collapse = "__")
+    ),
+    similarity_score = pid * reciprocal_cov
+  )
+
+# Keep only hits where the reverse alignment also exists
+directed_ids <- hits0 %>%
+  distinct(direction_id)
+```
+
+#===============================================================================
+# 4. Keep one best reciprocal link per unordered gene pair
+#===============================================================================
+
+
+```{r}
+reciprocal_links <- hits0 %>%
+  dplyr::filter(
+    reciprocal_cov >= 0.85,
+    pid >= 85
+  ) %>%
+  dplyr::arrange(
+    pair_id,
+    dplyr::desc(similarity_score),
+    dplyr::desc(pid),
+    dplyr::desc(reciprocal_cov)
+  ) %>%
+  dplyr::group_by(pair_id) %>%
+  dplyr::slice_head(n = 1) %>%
+  dplyr::ungroup()
+```
+
+#===============================================================================
+# 5. Keep only links between focal genome and the other genomes
+#===============================================================================
+
+```{r}
+
+focal_links <- reciprocal_links %>%
+  filter(genome1 == focal_genome | genome2 == focal_genome)
+```
+
+#===============================================================================
+# 6. Order genomes by similarity to focal genome
+#===============================================================================
+
+```{r}
+similarity_order <- focal_links %>%
+  mutate(
+    other_genome = if_else(genome1 == focal_genome, genome2, genome1)
+  ) %>%
+  group_by(other_genome) %>%
+  summarise(
+    mean_pid = mean(pid, na.rm = TRUE),
+    mean_reciprocal_cov = mean(reciprocal_cov, na.rm = TRUE),
+    mean_similarity_score = mean(similarity_score, na.rm = TRUE),
+    n_reciprocal_links = n(),
+    n_orthogroups = n_distinct(orthogroup),
+    .groups = "drop"
+  ) %>%
+  arrange(
+    desc(mean_similarity_score),
+    desc(n_reciprocal_links),
+    desc(mean_pid)
+  )
+
+# Focal genome at the bottom: y = 1
+# Most similar genome directly above it: y = 2
+genome_order <- bind_rows(
+  tibble(
+    genome = focal_genome,
+    y = 1,
+    mean_similarity_score = NA_real_,
+    n_reciprocal_links = NA_integer_
+  ),
+  similarity_order %>%
+    transmute(
+      genome = other_genome,
+      y = row_number() + 1,
+      mean_similarity_score,
+      n_reciprocal_links
+    )
+)
+
+# Optional: include genomes with no reciprocal hits, placed at the top
+missing_genomes <- setdiff(unique(nlrDat$genome), genome_order$genome)
+
+if (length(missing_genomes) > 0) {
+  genome_order <- bind_rows(
+    genome_order,
+    tibble(
+      genome = missing_genomes,
+      y = max(genome_order$y) + seq_along(missing_genomes),
+      mean_similarity_score = NA_real_,
+      n_reciprocal_links = 0L
+    )
+  )
+}
+```
+
+#===============================================================================
+# 7. Prepare genes for plotting
+#===============================================================================
+
+```{r}
+
+genes_plot <- nlrDat2 %>%
+  inner_join(genome_order, by = "genome") %>%
+  mutate(
+    xmin = geneorder - 0.45,
+    xmax = geneorder + 0.45
+  )
+```
+
+#===============================================================================
+# 8. Orient reciprocal links from focal genome upward
+#===============================================================================
+
+```{r}
+
+links_to_plot <- focal_links %>%
+  mutate(
+    focal_gene = if_else(genome1 == focal_genome, qname, tname),
+    other_gene = if_else(genome1 == focal_genome, tname, qname),
+
+    focal_geneorder = if_else(genome1 == focal_genome, geneorder1, geneorder2),
+    other_geneorder = if_else(genome1 == focal_genome, geneorder2, geneorder1),
+
+    other_genome = if_else(genome1 == focal_genome, genome2, genome1),
+
+    y_focal = 1
+  ) %>%
+  left_join(
+    genome_order %>% select(other_genome = genome, y_other = y),
+    by = "other_genome"
+  )
+```
+
+#===============================================================================
+# 9. Plot reciprocal focal-genome microsynteny figure
+#===============================================================================
+
+```{r}
+og_colors <- c(
+  "OG0000052" = "#0072B2",  # blue
+  "OG0000004" = "#E69F00",  # orange
+  "OG0000028" = "#009E73",  # bluish green
+  "OG0000019" = "#CC79A7",  # reddish purple
+  "OG0000054" = "#D55E00",  # vermillion
+  "OG0000051" = "#56B4E9",  # sky blue
+  "OG0000003" = "#F0E442",  # yellow
+  "OG0000010" = "#332288",  # dark purple
+  "OG0000030" = "#88CCEE",  # light blue
+  "OG0000017" = "#44AA99",  # teal
+  "OG0000047" = "#117733",  # dark green
+  "OG0000026" = "#882255",  # wine
+  "OG0000034" = "#AA4499",  # purple-pink
+  "OG0000053" = "#DDCC77",  # sand
+  "OG0000042" = "#999933"   # olive
+)
+
+p <- ggplot() +
+
+  geom_curve(
+    data = links_to_plot,
+    aes(
+      x = focal_geneorder,
+      y = y_focal,
+      xend = other_geneorder,
+      yend = y_other,
+      color = class
+    ),
+    curvature = 0.15,
+    alpha = 0.55,
+    linewidth = 0.4
+  ) +
+
+  geom_gene_arrow(
+    data = genes_plot,
+    aes(
+      xmin = xmin,
+      xmax = xmax,
+      y = y,
+      forward = gene_strand == "+",
+      fill = orthogroup
+    ),
+    arrowhead_height = unit(2.5, "mm"),
+    arrow_body_height = unit(2.5, "mm"),
+    color = "black",
+    linewidth = 0.25
+  ) +
+
+  scale_y_continuous(
+    breaks = genome_order$y,
+    labels = genome_order$genome,
+    limits = c(0.5, max(genome_order$y) + 0.5),
+    expand = c(0, 0)
+  ) +
+
+  scale_x_continuous(
+    breaks = seq(
+      0,
+      ceiling(max(genes_plot$xmax, na.rm = TRUE)),
+      by = 5
+    ),
+    name = "Gene order within locus"
+  ) +
+
+  scale_color_manual(
+    values = c(
+      identical = "#1f78b4",
+      similar = "#00BFFF",
+      partial = "#ff7f00",
+      weak = "grey70"
+    )
+  ) +
+
+  scale_fill_manual(
+  values = og_colors,
+  na.value = "white",
+  drop = FALSE) +
+
+  labs(
+    title = paste0("Reciprocal NLR similarity links to ", focal_genome),
+    subtitle = "Rows ordered upward by similarity to focal genome",
+    color = "PAF class",
+    fill = "Orthogroup"
+  ) +
+
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 9),
+    axis.text.x = element_text(size = 9),
+    plot.title = element_text(size = 13),
+    plot.subtitle = element_text(size = 10)
+  )
+
+p
+```
+

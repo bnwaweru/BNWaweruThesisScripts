@@ -1,0 +1,1032 @@
+---
+title: "Nucmer dot plots Watkins assemblies vs PGs chr5B"
+author: "Bernice Waweru"
+date: `r Sys.Date()`
+output: html_document
+---
+
+<!--
+Purpose:
+This R Markdown document processes NUCmer delta files generated from pairwise
+alignments between the chromosome 5B sequences of the WATDE0042 Watkins
+landrace and selected wheat pangenome assemblies. It calculates alignment
+percentage identity, filters alignments by length and genomic position, and
+generates chromosome dot plots for defined regions of chromosome 5B.
+
+The final document is rendered as an HTML file. Individual dot plots generated
+inside the analysis loop are additionally written to separate PDF files.
+-->
+
+
+# Set up working directories
+
+The working directory is set to the directory containing the NUCmer `.delta`
+alignment files. All relative input and output paths used in the subsequent
+analysis are resolved from this location.
+
+```{r}
+# Set the working directory to the location containing the NUCmer alignment
+# outputs. This path should be updated when the analysis is run in a different
+# computing environment.
+
+# set this relative to the path with the mummer outputs
+setwd("/Users/waweru/Documents/2022/IBSpy_Targets/2024-12-05_5B_Yellow_Rust/2025-07-02_Watkins_assemblies/nucmerResults")
+
+```
+
+
+# Load packages and configure the R Markdown environment
+
+The following section loads the R packages required for data manipulation,
+genomic interval handling, plotting, string processing, and figure
+arrangement. Global chunk options are configured so that R commands are shown
+in the rendered document.
+
+Generate dot plot figure of nucmer alignments between chromosomes with the data points colored by percentage similarity,
+
+```{r setup, include=FALSE}
+# Display R code by default in rendered output unless a chunk-specific option
+# overrides this setting.
+knitr::opts_chunk$set(echo = TRUE)
+
+## FUNCTIONS
+
+# dplyr and tidyr provide functions for filtering, transforming, and reshaping
+# tabular alignment data.
+library(dplyr)
+
+# magrittr provides the pipe operator used to pass objects between functions.
+library(magrittr)
+
+# GenomicRanges provides classes and methods for representing genomic
+# intervals. It is loaded here as part of the genomic analysis environment.
+library(GenomicRanges)
+
+# ggplot2 is used to construct dot plots and percentage-identity plots.
+library(ggplot2)
+
+library(tidyr)
+
+# viridis provides a perceptually uniform colour scale for representing
+# alignment percentage identity.
+library(viridis)
+
+# stringr provides functions for consistent string manipulation.
+library(stringr)
+
+# gridExtra provides tools for arranging multiple graphical objects.
+library(gridExtra)
+
+```
+
+
+# Define functions for reading, processing, and plotting NUCmer alignments
+
+The functions used to parse the NUCmer delta files and generate the plots were
+adapted from the workflow available at the repository linked below.
+
+Read Delta functions and plotting functions (adapted) used are from repository [here:](https://jmonlong.github.io/Hippocamplus/2017/09/19/mummerplots-with-ggplot2/)
+
+The `readDelta()` function reads the alignment information contained in a
+NUCmer delta file and converts the relevant alignment records into an R data
+frame. For each alignment, the resulting table contains the reference start
+and end coordinates, query start and end coordinates, reported alignment
+error, reference sequence identifier, and query sequence identifier.
+
+Reads in delta file output from nucmer into R and summaries into dataframe
+
+```{r define-functions}
+
+#===============================================================================
+# Function: readDelta
+#
+# Purpose:
+# Parse a delta file produced by NUCmer and return the principal coordinates
+# and error values for each pairwise alignment block.
+#
+# Arguments:
+#   deltafile  Path to a NUCmer delta file.
+#
+# Returns:
+#   A data frame containing:
+#     rs     Reference alignment start coordinate.
+#     re     Reference alignment end coordinate.
+#     qs     Query alignment start coordinate.
+#     qe     Query alignment end coordinate.
+#     error  Number of errors reported for the alignment.
+#     qid    Query sequence identifier.
+#     rid    Reference sequence identifier.
+#     strand Orientation of the query alignment relative to the reference.
+#===============================================================================
+
+readDelta <- function(deltafile){
+  # Read the complete delta file as individual text lines.
+  lines = scan(deltafile, 'a', sep='\n', quiet=TRUE)
+
+  # Remove the first line, which contains the paths or names of the input
+  # sequences rather than an alignment record.
+  lines = lines[-1]
+
+  # Split each line into fields separated by spaces.
+  lines.l = strsplit(lines, ' ')
+
+  # Determine the number of fields present in each parsed line.
+  lines.len = lapply(lines.l, length) %>% as.numeric
+
+  # Remove single-field lines representing delta-encoded distance values.
+  # The retained lines contain sequence headers or alignment summaries.
+  lines.l = lines.l[lines.len != 1]
+  lines.len = lines.len[lines.len != 1]
+
+  # Identify sequence-header lines, which contain four fields.
+  head.pos = which(lines.len == 4)
+
+  # Associate each alignment record with the sequence header that precedes it.
+  head.id = rep(head.pos, c(head.pos[-1], length(lines.l)+1)-head.pos)
+
+  # Extract the seven numeric fields contained in each alignment-summary line.
+  mat = matrix(as.numeric(unlist(lines.l[lines.len==7])), 7)
+
+  # Retain the first five alignment fields and transpose them so that each
+  # alignment occupies one row.
+  res = as.data.frame(t(mat[1:5,]))
+
+  # Assign informative column names to the retained alignment variables.
+  colnames(res) = c('rs','re','qs','qe','error')
+
+  # Recover the query sequence identifier associated with each alignment.
+  res$qid = unlist(lapply(lines.l[head.id[lines.len==7]], '[', 2))
+
+  # Recover the reference sequence identifier and remove the leading ">"
+  # character from the delta header.
+  res$rid = unlist(lapply(lines.l[head.id[lines.len==7]], '[', 1)) %>% gsub('^>', '', .)
+
+  # Infer alignment orientation from the order of the query start and end
+  # coordinates. Increasing coordinates represent the forward strand, whereas
+  # decreasing coordinates represent the reverse orientation.
+  res$strand = ifelse(res$qe-res$qs > 0, '+', '-')
+
+  # Return the parsed alignment data frame.
+  res
+}
+
+
+#===============================================================================
+# Function: calculate_perc_id_mid_points
+#
+# Purpose:
+# Calculate the reference length, approximate percentage identity, and
+# reference and query midpoint of every NUCmer alignment.
+#
+# Arguments:
+#   data  Data frame generated by readDelta().
+#
+# Returns:
+#   The input data frame with additional columns describing alignment length,
+#   percentage identity, identity category, and midpoint coordinates.
+#===============================================================================
+
+#calculates percentage identity and mid point for each mummer alignment
+calculate_perc_id_mid_points <- function(data){
+  # Calculate alignment length from the reference start and end coordinates.
+  data$r_length <- (data$re - data$rs)
+
+  # Estimate percentage identity using the reference alignment length and the
+  # error count reported in the delta file.
+  data$perc_id <- ((data$r_length - data$error)/data$r_length)*100
+
+  # Create a copy of percentage identity for conversion to a categorical
+  # variable where required by downstream plotting functions.
+  data$perc_id_factor <- data$perc_id
+
+  # Group alignments below 100% identity into a common category.
+  data[data$perc_id < 100, "perc_id_factor"] <- "<100"
+
+  # Convert the identity category to a factor.
+  data$perc_id_factor <- as.factor(data$perc_id_factor)
+
+  # Calculate the midpoint of each alignment on the reference sequence.
+  data$r_mid <- (data$rs + data$re)/2
+
+  # Calculate the midpoint of each alignment on the query sequence.
+  data$q_mid <- (data$qs + data$qe)/2
+
+  return(data)
+}
+
+
+#===============================================================================
+# Function: pre_plot_analysis
+#
+# Purpose:
+# Read a NUCmer delta file, calculate alignment summary statistics, and remove
+# alignments shorter than a specified minimum reference length.
+#
+# Arguments:
+#   delta_path  Path to the delta file.
+#   min_size    Minimum retained alignment length in base pairs.
+#
+# Returns:
+#   A processed and length-filtered alignment data frame.
+#===============================================================================
+
+#reads in delta file, calculates percentage ID and filters for a minimum alignment size
+pre_plot_analysis <- function(delta_path, min_size = 20000){
+  # Parse the NUCmer delta file.
+  data = readDelta(delta_path)
+
+  # Calculate alignment length, identity, and midpoint coordinates.
+  data <- calculate_perc_id_mid_points(data)
+
+  # Retain alignments whose reference length is at least min_size.
+  data_filt <- data[data$r_length >= min_size,]
+
+  return(data_filt)
+}
+
+
+#===============================================================================
+# Function: plot_by_perc_id_cap
+#
+# Purpose:
+# Produce a conventional NUCmer dot plot in which each alignment is represented
+# as a segment from its reference coordinates to its query coordinates.
+# Alignments are coloured according to percentage identity.
+#
+# Arguments:
+#   data       Processed alignment data frame.
+#   xmin       Lower reference-coordinate boundary.
+#   xmax       Upper reference-coordinate boundary.
+#   cap_lower  Lower limit of the percentage-identity colour scale.
+#   cap_upper  Upper limit of the percentage-identity colour scale.
+#===============================================================================
+
+# Plots diagonal scatter plot of a nucmer pairwise alignment with points coloured by percentage identity of alignment - x axis is reference, y axis is query
+plot_by_perc_id_cap <- function(data, xmin = 0, xmax = max(data$re), cap_lower, cap_upper){
+  # Sort alignments by percentage identity so that the plotting order reduces
+  # the effect of high-identity observations obscuring other alignments.
+
+  #order data by % ID to help with overplotting
+  data <- data[order(data$perc_id),]
+
+  # Plot reference coordinates on the x axis and query coordinates on the
+  # y axis. Each alignment is drawn as a segment and coloured by identity.
+  ggplot(data[data$rs > xmin & data$re < xmax,], aes(x=rs, xend=re, y=qs, yend=qe, colour=perc_id)) + geom_segment() +
+    geom_point(alpha=.5, size=1.5) +
+    theme_bw() + 
+    theme(strip.text.y=element_text(angle=180, size=5),
+          strip.background=element_blank()) +
+    xlab(unique(data$rid)) + ylab(unique(data$qid)) +
+    scale_colour_viridis(limits = c(cap_lower, cap_upper)) +
+    scale_x_continuous(breaks=seq(xmin,xmax,100000000)) +
+    scale_y_continuous(breaks=seq(0,max(data$qe),100000000))
+}
+
+
+#===============================================================================
+# Function: plot_by_perc_id_cap_midpoint
+#
+# Purpose:
+# Plot the midpoint of each alignment rather than its complete alignment
+# interval. Points are coloured by percentage identity. Axis labels and the
+# legend are suppressed to facilitate use in a multi-panel figure.
+#===============================================================================
+
+plot_by_perc_id_cap_midpoint <- function(data, xmin = 0, xmax = max(data$re), cap_lower, cap_upper){
+  # Sort observations by percentage identity before plotting.
+
+  #order data by % ID to help with overplotting
+  data <- data[order(data$perc_id),]
+
+  # Plot the reference midpoint against the query midpoint for each alignment.
+  ggplot(data[data$rs > xmin & data$re < xmax,], aes(x=r_mid, y=q_mid, colour=perc_id)) +
+    geom_point(size = 0.3) +
+    theme_bw() + 
+    theme(strip.text.y=element_text(angle=180, size=5),
+          strip.background=element_blank(),
+          legend.position = "none",
+          axis.title.x=element_blank(),
+          axis.text.x=element_blank(),
+          axis.title.y=element_blank(),
+          axis.text.y=element_blank(),) +
+    #xlab(unique(data$rid)) + ylab(unique(data$qid)) +
+    scale_colour_viridis(limits = c(cap_lower, cap_upper)) +
+    scale_x_continuous(breaks=seq(xmin,xmax,100000000)) +
+    scale_y_continuous(breaks=seq(0,max(data$qe),100000000))+
+    coord_cartesian(xlim=c(xmin,xmax))
+}
+
+
+#===============================================================================
+# Function: plot_perc_id_v_ref
+#
+# Purpose:
+# Plot alignment percentage identity against the alignment midpoint on the
+# reference sequence. Point colour represents alignment length.
+#===============================================================================
+
+plot_perc_id_v_ref <- function(data, xmin = 0, xmax = max(data$re), ymin = 97, ymax = 100){
+  # Restrict observations to the requested reference-coordinate interval and
+  # plot identity as a function of reference position.
+  ggplot(data[data$r_mid > xmin & data$r_mid < xmax,], aes(x=r_mid, y=perc_id, colour=r_length)) +
+    theme_bw() + xlab(data$rid) + ylab(paste0('percentage ID v ', data$qid)) +
+    geom_point(alpha=.5) +
+    ylim(ymin, ymax) +
+    scale_colour_viridis()
+}
+
+
+#===============================================================================
+# Function: plot_perc_id_v_ref_no_length
+#
+# Purpose:
+# Plot percentage identity against reference position without mapping alignment
+# length to point colour. Axis titles, labels, and the legend are suppressed
+# so that the plot can be incorporated into a composite figure.
+#===============================================================================
+
+plot_perc_id_v_ref_no_length <- function(data, xmin = 0, xmax = max(data$re), ymin = 97, ymax = 100, breaks = 0.5){
+  ggplot(data[data$r_mid > xmin & data$r_mid < xmax,], aes(x=r_mid, y=perc_id)) +
+    theme_bw() + 
+    #xlab(data$rid) + 
+   #ylab(paste0('percentage ID v ', data$qid)) +
+    theme(strip.text.y=element_text(angle=180, size=5),
+          strip.background=element_blank(),
+          legend.position = "none",
+          axis.title.x=element_blank(),
+          axis.text.x=element_blank(),
+          axis.title.y=element_blank(),
+          axis.text.y=element_blank(),) +
+    geom_point(alpha=.5, size = 0.5, colour = "gray25") +
+    scale_x_continuous(breaks=seq(xmin,xmax,100000000)) +
+    scale_y_continuous(limits = c(ymin, ymax), breaks=seq(ymin,ymax,breaks)) +
+    coord_cartesian(xlim=c(xmin,xmax))
+}
+
+
+#===============================================================================
+# Function: bin_data
+#
+# Purpose:
+# Assign each alignment to a fixed-width genomic bin according to its midpoint
+# on the reference sequence.
+#
+# Arguments:
+#   data            Processed alignment data.
+#   bin_size        Width of each genomic bin in base pairs.
+#   max_chrom_size  Maximum chromosome coordinate included in the binning.
+#===============================================================================
+
+#bins alignment dataframe by reference position
+bin_data <- function(data, bin_size, max_chrom_size){
+  # Generate bin-end coordinates from zero to the specified chromosome size.
+  bins <- seq(0, max_chrom_size, by = bin_size)
+
+  # Initialise an empty bin assignment for every alignment.
+  data$bin <- NA
+
+  # Assign each reference midpoint to the corresponding genomic bin.
+  for (i in bins){
+    data$bin <- ifelse(((data$r_mid > (i-bin_size)) & (data$r_mid < (i-1))), i, data$bin)
+  }
+
+  return(data)
+}
+
+
+#===============================================================================
+# Function: plot_medians_line_colour_cut_off
+#
+# Purpose:
+# Summarise percentage identity within fixed-width reference bins and plot the
+# median identity for each bin. Points are classified according to whether the
+# median identity meets a specified identity threshold.
+#===============================================================================
+
+#plots median percentage identity of each bin against reference position, colour of point is based on if the median percentage identity passes the identity threshold
+plot_medians_line_colour_cut_off <- function(data, bin_size = 10000000, cut_off = 99.99, ymin = 97, ymax = 100, max_chrom_size){
+  # Assign alignments to genomic bins.
+  comparison_filt_bin <- bin_data(data, bin_size = bin_size, max_chrom_size = max_chrom_size)
+
+  # Calculate median alignment identity within each bin.
+  comparison_medians <- aggregate(perc_id ~ bin, data = comparison_filt_bin, FUN=median)
+
+  # Rename the summary column to describe its contents.
+  colnames(comparison_medians)[2] <- "perc_id_median"
+
+  # Initialise the identity-threshold classification.
+  comparison_medians$cut_off <- NA
+
+  # Classify each bin according to whether its median identity is above or
+  # below the specified threshold.
+  comparison_medians$cut_off <- ifelse(comparison_medians$perc_id >= cut_off, paste0(">=",cut_off), paste0("<",cut_off))
+  comparison_medians$cut_off <- as.factor(comparison_medians$cut_off)
+  
+  # Plot median percentage identity against reference-bin position.
+  ggplot(comparison_medians, aes(x=bin, y = perc_id_median, colour = cut_off)) +
+    geom_line(colour = "grey") + 
+    geom_point(size = 1)  + 
+    ylim(ymin,ymax) +
+    scale_colour_manual(values = c("#73D055FF", "#440154FF")) +
+    labs(colour = "% id") +
+    theme_bw() +
+    xlab(data$rid) +
+    
+    ggtitle(paste0(data$rid, " v ", data$qid, " BinSize: ", bin_size, " CutOff: ", cut_off))
+}
+
+
+#===============================================================================
+# Function: plot_boxplots_median_colour_cut_off
+#
+# Purpose:
+# Display the distribution of alignment percentage identities within genomic
+# bins. Boxplot fill represents whether the median identity of a bin meets the
+# specified identity threshold.
+#===============================================================================
+
+#plots boxplots of percentage identity of each bin against reference position, colour of boxplot is based on if the median percentage identity passes the identity threshold
+plot_boxplots_median_colour_cut_off <- function(data, bin_size = 10000000, cut_off = 99.99, ymin = 97, ymax = 100, max_chrom_size){
+  # Assign each alignment to a genomic bin.
+  comparison_filt_bin <- bin_data(data, bin_size = bin_size, max_chrom_size = max_chrom_size)
+
+  # Calculate median identity within each bin.
+  comparison_medians <- aggregate(perc_id ~ bin, data = comparison_filt_bin, FUN=median)
+
+  # Rename the median-identity column.
+  colnames(comparison_medians)[2] <- "perc_id_median"
+
+  # Initialise and assign the identity-threshold category.
+  comparison_medians$cut_off <- NA
+  comparison_medians$cut_off <- ifelse(comparison_medians$perc_id >= cut_off, paste0(">=",cut_off), paste0("<",cut_off))
+  comparison_medians$cut_off <- as.factor(comparison_medians$cut_off)
+  
+  # Join bin-level median classifications back to the individual alignments.
+  comparison_to_plot <- merge(comparison_filt_bin, comparison_medians)
+  
+  # Plot the identity distribution within each genomic bin.
+  ggplot(comparison_to_plot, aes(x=bin, y = perc_id, group = bin, fill = cut_off)) +
+    geom_boxplot(outlier.shape = NA, lwd = 0.3) +
+    scale_fill_manual(values = c("darkorchid4", "gold")) +
+    #labs(fill = "% id") +
+    #scale_colour_viridis() +
+    #xlab(data$rid) +
+    theme_bw() +
+    theme(strip.text.y=element_text(angle=180, size=5),
+          strip.background=element_blank(),
+          legend.position = "none",
+          axis.title.x=element_blank(),
+          axis.text.x=element_blank(),
+          axis.title.y=element_blank(),
+          axis.text.y=element_blank(),) +
+    #ggtitle(paste0(data$rid, " v ", data$qid, " BinSize: ", bin_size, " CutOff: ", cut_off)) +
+    scale_x_continuous(breaks=seq(0,max(data$re),100000000)) +
+    scale_y_continuous(limits = c(ymin,ymax),breaks=seq(ymin,ymax,0.5))
+}
+
+
+## END OF FUNCTIONS
+```
+
+
+# Adjust the size of points in the dot plot
+
+The `plot_by_perc_id_cap()` function is redefined below with a smaller point
+size. The smaller points reduce overplotting when many alignment blocks occupy
+similar positions in the dot plot. The alignment segments and all other
+plotting settings remain unchanged.
+
+**How to change the size of the points in geom_point() to a smaller one?** in the plotting function, Done below
+
+```{r}
+
+#===============================================================================
+# Revised function: plot_by_perc_id_cap
+#
+# This version uses a point size of 0.4 rather than 1.5 to improve visualisation
+# of dense NUCmer alignments.
+#===============================================================================
+
+plot_by_perc_id_cap <- function(data, xmin = 0, xmax = max(data$re), cap_lower, cap_upper){
+  # Sort alignments by percentage identity before plotting.
+
+  #order data by % ID to help with overplotting
+  data <- data[order(data$perc_id),]
+
+  # Draw complete alignment segments and overlay small semi-transparent points.
+  ggplot(data[data$rs > xmin & data$re < xmax,], aes(x=rs, xend=re, y=qs, yend=qe, colour=perc_id)) + geom_segment() +
+    geom_point(alpha=.5, size=0.4) +
+    theme_bw() + 
+    theme(strip.text.y=element_text(angle=180, size=5),
+          strip.background=element_blank()) +
+    xlab(unique(data$rid)) + ylab(unique(data$qid)) +
+    scale_colour_viridis(limits = c(cap_lower, cap_upper)) +
+    scale_x_continuous(breaks=seq(xmin,xmax,100000000)) +
+    scale_y_continuous(breaks=seq(0,max(data$qe),100000000))
+}
+```
+
+
+# Apply the workflow to Watkins and pangenome chromosome 5B alignments
+
+This section iterates over NUCmer alignments between WATDE0042 and selected
+wheat pangenome or Watkins assemblies. The analysis is restricted to
+alignments of at least 10 kb within the first 20 Mb of chromosome 5B.
+
+The 10 kb minimum alignment threshold was selected to reduce the contribution
+of short matches, including matches that may arise from non-syntenic repetitive
+elements. Dot plots are written individually as PDF files.
+
+Adapting this section to alignments am working with.
+
+#=========================================================================================
+### For loop for CS v1.0 chr5B against chr5B of watkins assemblies W-0042 and W-0100
+
+#=========================================================================================
+
+```{r}
+
+#===============================================================================
+# Input and output configuration
+#===============================================================================
+
+# Define the directory containing the NUCmer delta files. Delta filenames are
+# expected to follow the pattern:
+#
+#   <reference>_<query>.delta
+#
+base_dir <- "/Users/waweru/Documents/2022/IBSpy_Targets/2024-12-05_5B_Yellow_Rust/2025-07-02_Watkins_assemblies/nucmerResults/"
+
+# Use a minimum alignment-length threshold of 10 kb. This threshold was chosen
+# to reduce the contribution of short alignments that may represent matches
+# between non-syntenic retrotransposons.
+
+# now using a threshold of 10kb alignments, based on lit that excluding shorter alignments 
+#between non-syntenic retro-transposons which have a median size of 9584 bp in wheat
+
+# Define a percentage-identity threshold for functions that classify alignment
+# summaries. This variable is not directly used in the dot-plot loop below.
+cut_off <- 99.99
+
+##create directory to save the plots
+
+# Construct the directory in which generated PDF figures will be stored.
+plot_dir <-  paste0(base_dir,"2026-06-19_dotPlotFigs/")
+
+# Create the figure directory if it does not already exist. Suppress warnings
+# when the directory is already present and assign the specified permissions.
+dir.create(path = paste0(plot_dir), showWarnings = FALSE, mode = 0777)
+
+# Record the current date so that it can be incorporated into output filenames
+# and provide a record of when each figure was generated.
+
+# to be added to figure as they are saved for posterity
+date <- Sys.Date() 
+date
+
+
+#===============================================================================
+# Plotting configuration
+#===============================================================================
+
+# Load scales for formatting chromosome coordinates displayed on plot axes.
+# Coordinates are subsequently converted from base pairs to megabases.
+library(scales) # to add commas to the axes labels
+
+# Disable scientific notation where possible so that large genomic coordinates
+# are displayed as conventional numbers.
+options(scipen = 999) # to remove exponential numbers in the axes
+
+
+#===============================================================================
+# Chromosome and assembly identifiers
+#===============================================================================
+
+### starting the loop here, as we iterate over references
+
+# Define the chromosome being analysed and construct the chromosome label used
+# in figure titles and axis labels.
+chr <- "5B"
+chrom <- paste0("chr", chr)
+
+# Define the genome assemblies compared against WATDE0042. These names must
+# correspond to the query component of the delta filenames.
+
+# the are the references being used 
+queries <-c("WATDE0042") #,  "WATDE0100"
+
+# Define the NUCmer reference accession. In this analysis, WATDE0042 is used as
+# the reference for all pairwise comparisons.
+
+# these are the queries
+references  <- c("CS_v1-0") 
+
+# Historical variables retained as comments from an earlier version of the
+# plotting workflow.
+
+# this the reference,
+#variety <- "chinese"
+
+#ref <- "Chinese-Spring"
+
+# Process every combination of query and reference listed above.
+for (query in queries) {
+  
+  for (ref in references) {
+
+  # Construct the path to the NUCmer delta file for the current comparison.
+  #CS_v1-0_chr5B_vs_WATDE0100_chr5B                               
+  data_dir_query <- paste0(base_dir,ref,"_",chrom,"_vs_",query,"_",chrom,".delta")
+
+  # Print the input path to the rendered report or R console to document which
+  # comparison is being processed.
+  print(data_dir_query)
+  
+  ## read in the data
+
+  # Set the minimum retained alignment length to 10,000 bp.
+  min_size <- 10000
+
+  # Parse the delta file, calculate alignment statistics, and retain alignments
+  # meeting the minimum-length requirement.
+  comparison_filt <- pre_plot_analysis(delta_path = data_dir_query, min_size = min_size)
+  
+  #plot and save 
+  #========================================================
+  #===== plot based on filters for start and end region ======
+  #===== alignments longer then 10kb, for a specific region ======
+
+  # Define the chromosome interval displayed in the final dot plot. The current
+  # analysis is the full chr5B chromosome to chromosome alignements
+  # sequences.
+  ref_start <- 0
+  ref_end <- 100000000
+
+  # Restate the minimum alignment length used by the regional filter.
+  min_size <- 10000
+  
+  # Convert the reference boundaries from base pairs to megabases for use in
+  # output filenames, figure subtitles, and descriptive labels.
+
+  ## divide by 1000000 to get values in Mb for plotting
+  ref_start_mb <- ref_start / 1e6
+  ref_end_mb   <- ref_end / 1e6
+  #min_size_mb <- min_size / 1e6
+
+
+  # The commented TIFF command documents an alternative raster output format
+  # used in an earlier version of the workflow.
+
+#tiff(paste0(plot_dir,date,"_dot_plot",ref," _2B_VS_",query,"_","30-55Mbp",min_size,"bp.tiff"), res = 300, width = 8.3, height = 4.8, units = "in")
+
+  # Open a PDF graphics device for the current comparison. The output filename
+  # records the analysis date, reference, query, chromosome, and plotted
+  # interval.
+  pdf(paste0(plot_dir,date,"_",ref,"_v_",query,"_",chrom,"_", "chr5BFull","Mb.pdf"), width = 10.3, height = 8.8)# res =   300, units = "in")
+  
+  # Alternative output filename that omits the plotted interval.
+  #  pdf(paste0(plot_dir,date,"_",ref,"_v_",query,"_",chrom,".pdf"), width = 10.3, height = 6.8)# res =   300, units = "in")
+
+  # Historical filtering expression retained as a comment.
+  #%>% filter(rs >= 19000000) %>% filter(re <= ref_end)
+
+  # Retain alignments entirely contained within the selected interval on both
+  # the reference and query sequences. Also require a reference alignment
+  # length of at least 10 kb.
+
+# we filter start and end for both ref and query
+  #filt_data <- comparison_filt %>% filter(r_length >= min_size)
+
+  # Alternative filter that restricts only reference coordinates and alignment
+  # length, without restricting query coordinates.
+  #filt_data <- comparison_filt %>%  filter(rs >= ref_start) %>% filter(re <= ref_end) %>% filter(r_length >= min_size)
+  filt_data <- comparison_filt %>%  filter(rs >= ref_start) %>% filter(re <= ref_end) %>% filter(qs >= ref_start) %>% filter(qe <= ref_end) %>% filter(r_length >= min_size)
+
+
+  # Construct and explicitly print the dot plot. Explicit printing is required
+  # because the plotting command is evaluated inside a loop while a PDF device
+  # is open.
+  print(filt_data %>% plot_by_perc_id_cap(., cap_lower = 97, cap_upper = 100) + 
+
+    # Rotate reference-axis labels and adjust their text size to improve
+    # readability when coordinates are densely spaced.
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    theme(axis.text.x = element_text(size = 5 )) +
+
+    # Reduce query-axis label size.
+    theme(axis.text.y = element_text(size = 4.5)) +
+
+    # Display query coordinates in megabases at 100 Mb intervals and label the
+    # axis with the query assembly and chromosome, hence divide by 1e8
+    scale_y_continuous(breaks = seq(min(filt_data$qs), max(filt_data$qs), 1e6),labels = function(x) scales::number(x / 1e6, accuracy = 0.01),name = paste0(query, " ", chrom, " (Mb)")) +
+
+    # Display reference coordinates in megabases at 100 Mb intervals and label
+    # the axis with the reference accession and chromosome.
+    scale_x_continuous(breaks = seq(min(filt_data$rs), max(filt_data$rs), 1e6),labels = function(x) scales::number(x / 1e6, accuracy = 0.01),name = paste0(ref, " ", chrom, " (Mb)")) +
+
+    # Alternative axis formatting that displays raw base-pair coordinates with
+    # comma separators.
+    #scale_y_continuous(breaks = seq(min(filt_data$qs),max(filt_data$qs) ,1000000), labels = scales::comma, name = paste0(query, " ", chrom)) +
+    #scale_x_continuous(breaks = seq(min(filt_data$rs),max(filt_data$rs) ,1000000), labels = scales::comma, name = paste0(ref, " ", chrom)) +
+
+    # Historical examples of vertical markers for specific gene coordinates.
+    #add a vline to the position of the gene on either genome
+    #geom_vline(xintercept = 635597602, colour="red", lwd=0.3) +
+    #geom_vline(xintercept = 635601741, colour="red", lwd=0.3) +
+
+    # Add vertical lines at 10 Mb and 12.5 Mb on the WATDE0042 reference axis.
+    # These coordinates delimit the first locus of interest in WATDE0042.
+
+    # 🔴 Add horizontal/vertical lines at 10 Mb and 12.5 Mb - for W-0042 loc 1, and for wat0100 14.4e6, 15.1e6
+    geom_hline(yintercept = c(9.1e6, 13.2e6), colour = "red", lwd = 0.3) +
+
+    # Alternative WATDE0042 coordinates for a second locus retained as a
+    # commented plotting option.
+      # loc 2
+    #geom_vline(xintercept = c(75.5e6, 75.8e6), colour = "red", lwd = 0.3) +
+      
+    # Alternative query-coordinate boundaries for WATDE0100.
+      #watde0100
+    #geom_hline(yintercept = c(13.9e6, 16.2e6), colour = "red", lwd = 0.3) + 
+
+    # Alternative query-coordinate boundaries for Norin 61.
+      #norin61
+   # geom_hline(yintercept = c(8.5e6, 11.5e6), colour = "red", lwd = 0.3) +
+
+    # Alternative query-coordinate boundaries for Lancer.
+          #lancer
+    #geom_hline(yintercept = c(9.4e6, 10.3e6), colour = "red", lwd = 0.3) +
+     
+    # Add a descriptive title identifying the reference, query, chromosome,
+    # and minimum retained alignment length.
+    ggtitle(label = paste0("Dot plot of ",ref," ",chrom," against ",chrom, " of ",query, " alignments longer than ",min_size," bp")) +
+
+    # Set the title text size.
+    theme(plot.title=element_text(size=12))+
+
+    # Add a subtitle reporting the plotted chromosome interval in megabases.
+    #labs(subtitle=paste0("alignments between ",ref_start_mb,"-",ref_end_mb," Mb")) +
+
+    # Set the subtitle text size.
+    theme(plot.subtitle = element_text(size=9)))
+  
+  # Close the current PDF graphics device and complete writing of the figure.
+  dev.off()
+ }
+}
+```
+
+
+#=========================================================================================
+### For loop for watkins assemblies W-0042 and W-0100  against PGs for 1-100 Mb 
+#### October 14 2025
+#=========================================================================================
+
+When running `ggplot2` commands within a `for` loop, the plot object must be
+explicitly passed to `print()` for it to be rendered on an open graphical
+device. Without `print()`, the resulting PDF file may be empty.
+
+```{r}
+
+#===============================================================================
+# Input and output configuration
+#===============================================================================
+
+# Define the directory containing the NUCmer delta files. Delta filenames are
+# expected to follow the pattern:
+#
+#   <reference>_<query>.delta
+#
+base_dir <- "/Users/waweru/Documents/2022/IBSpy_Targets/2024-12-05_5B_Yellow_Rust/2025-07-02_Watkins_assemblies/nucmerResults/"
+
+# Use a minimum alignment-length threshold of 10 kb. This threshold was chosen
+# to reduce the contribution of short alignments that may represent matches
+# between non-syntenic retrotransposons.
+
+# now using a threshold of 10kb alignments, based on lit that excluding shorter alignments 
+#between non-syntenic retro-transposons which have a median size of 9584 bp in wheat
+
+# Define a percentage-identity threshold for functions that classify alignment
+# summaries. This variable is not directly used in the dot-plot loop below.
+cut_off <- 99.99
+
+##create directory to save the plots
+
+# Construct the directory in which generated PDF figures will be stored.
+plot_dir <-  paste0(base_dir,"2026-06-19_dotPlotFigs/")
+
+# Create the figure directory if it does not already exist. Suppress warnings
+# when the directory is already present and assign the specified permissions.
+dir.create(path = paste0(plot_dir), showWarnings = FALSE, mode = 0777)
+
+# Record the current date so that it can be incorporated into output filenames
+# and provide a record of when each figure was generated.
+
+# to be added to figure as they are saved for posterity
+date <- Sys.Date() 
+date
+
+
+#===============================================================================
+# Plotting configuration
+#===============================================================================
+
+# Load scales for formatting chromosome coordinates displayed on plot axes.
+# Coordinates are subsequently converted from base pairs to megabases.
+library(scales) # to add commas to the axes labels
+
+# Disable scientific notation where possible so that large genomic coordinates
+# are displayed as conventional numbers.
+options(scipen = 999) # to remove exponential numbers in the axes
+
+
+#===============================================================================
+# Chromosome and assembly identifiers
+#===============================================================================
+
+### starting the loop here, as we iterate over references
+
+# Define the chromosome being analysed and construct the chromosome label used
+# in figure titles and axis labels.
+chr <- "5B"
+chrom <- paste0("chr", chr)
+
+# Define the genome assemblies compared against WATDE0042. These names must
+# correspond to the query component of the delta filenames.
+
+# the are the references being used 
+queries <- c("kariega_v1","fielder_v1","renan_v2.1","paragon_v3","cadenza_v2","symattis","chinesespring","arinalrfor","jagger","julius","lancer","landmark","norin61","mace","stanley","WATDE0100")
+
+# Define the NUCmer reference accession. In this analysis, WATDE0042 is used as
+# the reference for all pairwise comparisons.
+
+# these are the queries
+references  <- c("WATDE0042") #, "WATDE0100")
+
+# Historical variables retained as comments from an earlier version of the
+# plotting workflow.
+
+# this the reference,
+#variety <- "chinese"
+
+#ref <- "Chinese-Spring"
+
+
+#===============================================================================
+# Iterate over pairwise comparisons
+#===============================================================================
+
+# Process every combination of query and reference listed above.
+for (query in queries) {
+  
+  for (ref in references) {
+
+  # Construct the path to the NUCmer delta file for the current comparison.
+  data_dir_query <- paste0(base_dir,ref,"_",query,".delta")
+
+  # Print the input path to the rendered report or R console to document which
+  # comparison is being processed.
+  print(data_dir_query)
+  
+  ## read in the data
+
+  # Set the minimum retained alignment length to 10,000 bp.
+  min_size <- 10000
+
+  # Parse the delta file, calculate alignment statistics, and retain alignments
+  # meeting the minimum-length requirement.
+  comparison_filt <- pre_plot_analysis(delta_path = data_dir_query, min_size = min_size)
+  
+  #plot and save 
+  #========================================================
+  #===== plot based on filters for start and end region ======
+  #===== alignments longer then 10kb, for a specific region ======
+
+  # Define the chromosome interval displayed in the final dot plot. The current
+  # analysis includes positions from 0 to 20 Mb on both the reference and query
+  # sequences.
+  ref_start <- 0
+  ref_end <- 20000000
+
+  # Restate the minimum alignment length used by the regional filter.
+  min_size <- 10000
+  
+  # Convert the reference boundaries from base pairs to megabases for use in
+  # output filenames, figure subtitles, and descriptive labels.
+
+  ## divide by 1000000 to get values in <b for plotting
+  ref_start_mb <- ref_start / 1e6
+  ref_end_mb   <- ref_end / 1e6
+  #min_size_mb <- min_size / 1e6
+
+
+  # The commented TIFF command documents an alternative raster output format
+  # used in an earlier version of the workflow.
+
+#tiff(paste0(plot_dir,date,"_dot_plot",ref," _2B_VS_",query,"_","30-55Mbp",min_size,"bp.tiff"), res = 300, width = 8.3, height = 4.8, units = "in")
+
+  # Open a PDF graphics device for the current comparison. The output filename
+  # records the analysis date, reference, query, chromosome, and plotted
+  # interval.
+  pdf(paste0(plot_dir,date,"_",ref,"_v_",query,"_",chrom,"_", ref_start_mb,"-",ref_end_mb,"Mb_v2.pdf"), width = 10.4, height = 6.8)# res =   300, units = "in")
+  
+  # Alternative output filename that omits the plotted interval.
+  #  pdf(paste0(plot_dir,date,"_",ref,"_v_",query,"_",chrom,".pdf"), width = 10.3, height = 6.8)# res =   300, units = "in")
+
+  # Historical filtering expression retained as a comment.
+  #%>% filter(rs >= 19000000) %>% filter(re <= ref_end)
+
+  # Retain alignments entirely contained within the selected interval on both
+  # the reference and query sequences. Also require a reference alignment
+  # length of at least 10 kb.
+
+# we filter start and end for both ref and query
+  filt_data <- comparison_filt %>%  filter(rs >= ref_start) %>% filter(re <= ref_end) %>% filter(qs >= ref_start) %>% filter(qe <= ref_end) %>% filter(r_length >= min_size)
+
+  # Alternative filter that restricts only reference coordinates and alignment
+  # length, without restricting query coordinates.
+  #filt_data <- comparison_filt %>%  filter(rs >= ref_start) %>% filter(re <= ref_end) %>% filter(r_length >= min_size)
+
+
+  # Construct and explicitly print the dot plot. Explicit printing is required
+  # because the plotting command is evaluated inside a loop while a PDF device
+  # is open.
+  print(filt_data %>% plot_by_perc_id_cap(., cap_lower = 97, cap_upper = 100) + 
+
+    # Rotate reference-axis labels and adjust their text size to improve
+    # readability when coordinates are densely spaced.
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    theme(axis.text.x = element_text(size = 5 )) +
+
+    # Reduce query-axis label size.
+    theme(axis.text.y = element_text(size = 4.5)) +
+
+    # Display query coordinates in megabases at 1 Mb intervals and label the
+    # axis with the query assembly and chromosome.
+    scale_y_continuous(breaks = seq(min(filt_data$qs), max(filt_data$qs), 1e6),labels = function(x) scales::number(x / 1e6, accuracy = 0.001),name = paste0(query, " ", chrom, " (Mb)")) +
+
+    # Display reference coordinates in megabases at 1 Mb intervals and label
+    # the axis with the reference accession and chromosome.
+    
+    #scale_x_continuous(breaks = seq(min(filt_data$rs), max(filt_data$rs), 1e6),labels = function(x) scales::number(x / 1e6, accuracy = 0.001),name = paste0(ref, " ", chrom, " (Mb)")) +
+    #### changin scale x so that the x axis scale is always the same in all the plots
+      
+    scale_x_continuous(
+    limits = c(ref_start, ref_end),
+    breaks = seq(ref_start, ref_end, by = 1e6),
+    labels = function(x) scales::number(x / 1e6, accuracy = 1),
+    name = paste0(ref, " ", chrom, " (Mb)"),
+    expand = c(0, 0)) +
+    # Alternative axis formatting that displays raw base-pair coordinates with
+    # comma separators.
+    #scale_y_continuous(breaks = seq(min(filt_data$qs),max(filt_data$qs) ,1000000), labels = scales::comma, name = paste0(query, " ", chrom)) +
+    #scale_x_continuous(breaks = seq(min(filt_data$rs),max(filt_data$rs) ,1000000), labels = scales::comma, name = paste0(ref, " ", chrom)) +
+
+    # Historical examples of vertical markers for specific gene coordinates.
+    #add a vline to the position of the gene on either genome
+    #geom_vline(xintercept = 635597602, colour="red", lwd=0.3) +
+    #geom_vline(xintercept = 635601741, colour="red", lwd=0.3) +
+
+    # Add vertical lines at 10 Mb and 12.5 Mb on the WATDE0042 reference axis.
+    # These coordinates delimit the first locus of interest in WATDE0042.
+
+    # 🔴 Add horizontal/vertical lines at 10 Mb and 12.5 Mb - for W-0042 loc 1, and for wat0100 14.4e6, 15.1e6
+    geom_vline(xintercept = c(9.1e6, 13.2e6), colour = "red", lwd = 0.3) +
+
+    # Alternative WATDE0042 coordinates for a second locus retained as a
+    # commented plotting option.
+      # loc 2
+    #geom_vline(xintercept = c(75.5e6, 75.8e6), colour = "red", lwd = 0.3) +
+      
+    # Alternative query-coordinate boundaries for WATDE0100.
+      #watde0100
+    #geom_hline(yintercept = c(14.4e6, 15.1e6), colour = "red", lwd = 0.3) + 
+
+    # Alternative query-coordinate boundaries for Norin 61.
+      #norin61
+   # geom_hline(yintercept = c(8.5e6, 11.5e6), colour = "red", lwd = 0.3) +
+
+    # Alternative query-coordinate boundaries for Lancer.
+          #lancer
+    #geom_hline(yintercept = c(9.4e6, 10.3e6), colour = "red", lwd = 0.3) +
+     
+    # Add a descriptive title identifying the reference, query, chromosome,
+    # and minimum retained alignment length.
+    ggtitle(label = paste0("Dot plot of ",ref," ",chrom," against ",chrom, " of ",query, " alignments longer than ",min_size," bp")) +
+
+    # Set the title text size.
+    theme(plot.title=element_text(size=12))+
+
+    # Add a subtitle reporting the plotted chromosome interval in megabases.
+    labs(subtitle=paste0("alignments between ",ref_start_mb,"-",ref_end_mb," Mb")) +
+
+    # Set the subtitle text size.
+    theme(plot.subtitle = element_text(size=9)))
+  
+  # Close the current PDF graphics device and complete writing of the figure.
+  dev.off()
+ }
+}
+
+```
+
