@@ -1,0 +1,14 @@
+*.fasta
+*.fa
+*.fastq
+*.tsv
+*.tsv.gz
+*.bam
+*.bai
+*.kmc_pre
+*.kmc_suf
+batch_logs/
+batchLogs/
+spades_contigs_assembly*/
+kmcOut_*/
+.DS_Store

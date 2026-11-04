@@ -1,0 +1,266 @@
+---
+title: "Hierachal-clustering of Kmer presence absence matrix"
+author: "Bernice  N Waweru"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+workDir="/Users/waweru/Documents/2022/IBSpy_Targets/2024-06-03_Rht1_locus/2024-06-08_CS_4B-30860000-30910000_Rht-B1/2025-03-05_ibspy_analysis/"
+
+setwd(paste0(workDir))
+
+kmersPresAbsKmersum <-paste0(workDir,"RhtB1_presence_absence_v2+kmersums.csv")
+
+kmerSeqsRawCounts <- paste0(workDir,"RhtB1_combinedRaWKmerCounts.csv")
+
+blastOut <- paste0(workDir,"RhtB1_ContigkmersSeqsToAnchorSeq_blast.csv")
+
+```
+
+#### load libraries
+```{r}
+library(magrittr)
+library(tidyverse)
+#install.packages("vegan")
+library(vegan)
+library(readxl)
+library(pheatmap)
+library(ggplot2)
+```
+
+
+
+### Import raw data
+
+Load file with combined presence absence for all three intervals.
+
+```{r import-data-presabse-with-kmersums}
+
+pres_abs_kmersums_df_all <- read_csv(kmersPresAbsKmersum, col_names = T)
+pres_abs_kmersums_df_all$...1 <- NULL
+
+```
+
+### Accession 1: Chinese and Jagger
+
+Get presence absence data for kmers from either chinese spring (wild type) or jagger (alternate, daruma derived)
+
+```{r}
+pres_abs_kmersums_df <- pres_abs_kmersums_df_all %>% filter((grepl("chinese", seqname) | grepl("jagger", seqname))) #81,579
+
+
+```
+
+
+
+```{r immport-data-kmerseq-raw-counts}
+
+kmer_counts_df <- read_csv(kmerSeqsRawCounts, col_names = T)
+kmer_counts_df$`Unnamed: 0` <- NULL 
+kmer_counts_df$...1 <- NULL
+
+```
+
+Add raw kmer counts to presence absence df, keeping only the rows from the kmer counts file that have corresponding ids in the pre_absence file,with raw kmer counts greater than `1` and less than `255`, and keeping only
+
+```{r merge-files}
+
+presabs_kmersums_raw_counts_df <- left_join(kmer_counts_df, pres_abs_kmersums_df, by = "seqname")
+
+presabs_kmersums_raw_counts_df %<>% filter(raw_kmer_count > 1 & raw_kmer_count <= 255)
+
+```
+
+
+```{r import-blast-data}
+
+blastInfo <- read_csv(blastOut, col_names = T)
+blastInfo$...1 <- NULL
+#blastInfo <- blastInfo %>% extract(query_id, into = c("query_id", "interval"),regex = "^((?:[^-]*-){5}[^-]*)-(.*)$" )
+
+```
+
+Add blast info
+
+```{r, add-blast-info}
+# merge the above df with the blast df based on kmer ID
+by <- join_by(seqname == query_id)
+
+preAbsKmerSmsRwCntsBlstDf <- left_join(presabs_kmersums_raw_counts_df, blastInfo, by )
+
+```
+
+
+
+Create a file with kmersums and raw counts before running the blast to combine to clustered data
+```{r}
+KmerSmsRwCntsBlstDf_inforDf <- preAbsKmerSmsRwCntsBlstDf[,c(1,2,3,c(979:ncol(preAbsKmerSmsRwCntsBlstDf)))]
+
+```
+
+Remove any rows that do not have a raw kmer count
+
+```{r}
+preAbsKmerSmsRwCntsBlstDf %<>% filter(!is.na(raw_kmer_count))
+```
+
+Remove any rows that have a kmersum value of 0, for this region we need a few to send use as nulls in our analysis, hence we save them in a file
+
+```{r}
+preAbsKmerSmsRwCntsBlstDf  %>% filter(kmer_sum == 0) -> kmer_sum_0_df
+
+write_csv(kmer_sum_0_df, file = "./RhtB1_NullKmers.csv")
+
+preAbsKmerSmsRwCntsBlstDf %<>% filter(kmer_sum != 0)
+```
+
+
+Plot the raw kmercounts against the kmersums
+  
+```{r}
+
+preAbsKmerSmsRwCntsBlstDf  %>% filter(raw_kmer_count > 1) %>%
+  ggplot(.,aes(x=raw_kmer_count, y=kmer_sum)) +
+  geom_point()
+```
+
+lots of kmers present in almost all the samples
+
+```{r}
+
+preAbsKmerSmsRwCntsBlstDf %>% 
+  ggplot(.,aes(x=raw_kmer_count, y=kmer_sum)) +
+  geom_point() +
+    ggtitle("Plot of kmerSums against rawCount of kmers from Chinese Spring and Jagger for Rht-B1 locus")
+
+```
+
+
+Moving on to cluster the accessions based on the kmers
+```{r filt-data}
+
+clustering_df <- preAbsKmerSmsRwCntsBlstDf  
+
+clustering_df <- clustering_df[,c(1,4:((ncol(clustering_df))-18))] # with blast infor in the df
+
+#clustering_df <- clustering_df[,c(1,5:((ncol(clustering_df))-5))]
+
+kmer_IDs <- clustering_df$seqname
+
+rownames(clustering_df) <- clustering_df$seqname # set kmerID as row names
+
+clustering_df$seqname <- NULL
+
+clustering_df <- as.data.frame(clustering_df)
+rownames(clustering_df) <- kmer_IDs
+
+#str(clustering_df)
+
+#dropping any non numeric columns
+
+clustering_df <- clustering_df[sapply(clustering_df, is.numeric)]
+```
+
+
+Generate a dissimilarity matrix
+
+```{r}
+
+# Step 1: Calculate a dissimilarity matrix
+# Use a binary distance measure suitable for presence-absence data.
+# "jaccard" is a common choice for binary data.
+dissimilarity_matrix <- vegdist(clustering_df, method = "jaccard")
+
+# Step 2: Perform hierarchical clustering
+# Use the `hclust` function for hierarchical clustering
+hc_clustering_df <- hclust(dissimilarity_matrix, method = "average")
+
+# Step 3: Plot the dendrogram
+#plot(hc_clustering_df, main = "Hierarchical Clustering Dendrogram",  sub = "", cex = 0.8)
+
+
+# Optional: Cut the dendrogram to create clusters
+# You can cut the dendrogram at a certain height to form clusters.
+#clusters <- cutree(hc_mace, k = 4)  # Adjust k for the number of clusters you want
+#print(clusters)
+
+
+# Step 4: Use pheatmap to plot the heatmap with dendrogram
+pheatmap_clustering_df <- pheatmap(
+  mat = as.matrix(clustering_df),       # Convert the dataframe to a matrix for pheatmap
+  cluster_rows = hc_clustering_df,           # Use the previously calculated hclust for rows
+  cluster_cols = TRUE,         # By default, it will cluster columns
+  show_rownames = FALSE,        # Show row names (samples)
+  fontsize_row = 6,
+  show_colnames = FALSE,        # Show column names (variables)
+  main =  "Heatmap with Dendrogram of Rht-B1 kmers from Chinese Spring and Jagger",
+  filename = "RhtB1_kmer_heatmap.pdf",
+  width = 12,
+  height = 9
+)
+
+```
+
+
+
+After generating the heatmap, extract the data based on the order of columns  and rows as they were clustered 
+
+```{r}
+# Extract the order of columns after clustering
+col_order <- pheatmap_clustering_df$tree_col$order
+ordered_colnames <- colnames(clustering_df)[col_order]
+
+# Extract the order of rows after clustering
+row_order <- pheatmap_clustering_df$tree_row$order
+ordered_rownames <- rownames(clustering_df)[row_order]
+
+# Reorder the data based on the clustering results
+# First, reorder the rows and then the columns
+clustered_data <- clustering_df[ordered_rownames, ordered_colnames]
+
+# Add the ordered row names as a new column to the reordered data
+clustered_data$Clustered_Row_Names <- ordered_rownames
+
+# Optional: Move the new column to the front of the dataframe
+clustered_data <- clustered_data[, c(ncol(clustered_data), 1:(ncol(clustered_data) - 1))]
+
+# Print the final clustered data
+#print(clustered_data)
+
+## before saving, merge with the kmerSumsFile so we can get the sequences for alignment later
+
+#first rename clustered_row_names column to seqname for merging
+# Rename column 'A' to 'X'
+#df <- df %>% rename(X = A)
+clustered_data <- clustered_data %>% rename(seqname = Clustered_Row_Names)
+
+#clustered_data <- left_join(clustered_data, kmer_counts_kmersums_infor_df,by = "seqname")
+
+#write_csv(clustered_data, file = "./MG_WATDE0776_kmers_seq_clustered.csv")
+
+#===== if we have blast info ====================
+#================================================
+
+clustered_data <- left_join(clustered_data, KmerSmsRwCntsBlstDf_inforDf,by = "seqname")
+
+# because we have several contigs, we first arrange by adjusted start, then by contig
+
+clustered_data_srtd <- clustered_data %>% arrange(subject_id, adjusted_start)
+
+#clustered_data_srtd <- clustered_data[order(clustered_data$adjusted_start),]
+
+clustered_dataT <- t(clustered_data_srtd) %>% as.data.frame(.)
+
+clustered_dataT$headers <- rownames(clustered_dataT)
+
+write_csv(clustered_dataT, file = "./2026-Nov_Rht-B1_kmers_seq_clustered_v3.csv")
+
+write_csv(clustered_data_srtd, file = "./2026-Nov_Rht-B1_kmers_seq_clustered_notTransposed.csv")
+
+```
+
+
+ 
