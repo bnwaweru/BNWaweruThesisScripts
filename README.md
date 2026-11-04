@@ -1,4 +1,4 @@
-# KHaploTrack — single-anchor module
+# KHaploTrack : Single-anchor module
 
 Generating haplotype-specific k-mer markers for a locus in an accession that has no genome
 assembly. The idea: use an assembled genome as an **anchor**, take k-mers from the anchor interval
