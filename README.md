@@ -1,58 +1,83 @@
-# KHaploTrack : Single-anchor module
+# BNWaweru, PhD thesis scripts
 
-Generating haplotype-specific k-mer markers for a locus in an accession that has no genome
-assembly. The idea: use an assembled genome as an **anchor**, take k-mers from the anchor interval
-as bait, pull the matching reads out of a query accession, assemble them, keep the k-mers unique to
-the query, and score those k-mers for presence or absence across a wheat diversity panel.
+Analysis code supporting my PhD thesis on pangenome-informed haplotype analysis for disease
+resistance in wheat.
 
-**Worked example in this folder:** Chinese Spring anchor, `chr4B:30860000-30910000` — a 50 kb
-interval spanning *Rht-B1* — with the repeat filter set to MDR2 and `jagger` and `stanley` as the
-query accessions. Every script is configured for that run, so the whole module can be read as one
-continuous analysis.
+## Overview
 
-![Pipeline overview](pipeline_overview.png)
+Breeding for disease resistance depends on knowing which haplotype an accession carries at a
+resistance locus. The difficulty is that most cultivars and landraces of interest have no genome
+assembly, so the sequence underlying their haplotype is not directly available, and without that
+sequence, diagnostic markers cannot be designed. This thesis combines the wheat pangenome with
+*k*-mer-based methods to characterise haplotypes at resistance loci without needing an assembly for
+every accession.
 
-## The steps
+Chapter 2 surveys haplotype structure at known resistance loci using identity-by-state variation
+counts. Chapter 3 develops a *k*-mer framework that reconstructs local haplotype sequence from reads
+retrieved against an assembled anchor genome and converts it into candidate markers. Chapter 4
+characterises structural variation at the *Yr47* locus across pangenome assemblies and Watkins
+landrace genomes. Chapter 5 tests the genetics of *Yr47* resistance in a biparental mapping
+population.
 
-Scripts are numbered in run order. An `N.0` script is the step itself; an `N.1` script is a SLURM
-wrapper that passes variables to the Python module it sits beside.
+## Using this repository
 
-| Script | What it does |
+Scripts are grouped by thesis chapter. Each is the code as it was run rather than a packaged tool:
+file paths, module names and job-scheduler directives are specific to the John Innes Centre HPC,
+and the input data which include genome assemblies, raw reads, precomputed *k*-mer databases, are held in
+institutional storage rather than here.
+
+## Pipelines
+
+| | |
 |---|---|
-| `1.0`, `1.1` | Build whole-genome 31-mer databases for the anchor: a repeat set (k-mers occurring at least twice, `-ci2`) and the complete set (`-ci1`). `1.1` does the same for the ten pangenome assemblies. |
-| `2.0` | Cut the bait interval out of the anchor with `samtools faidx`, build its 31-mer database, and subtract the repeat set. What remains are bait k-mers that are non-repetitive genome-wide. |
-| `3.0` | Use those bait k-mers to pull reads out of each query accession's raw sequencing data, then recover each read's mate so pairs stay intact for assembly. |
-| `4.0`, `4.1` | Count how many bait k-mers each retrieved read carries and bin the reads into cumulative groups from 20 up to 150+ k-mers. More bait k-mers in a read means stronger evidence it came from the target interval. |
-| `5.0`, `5.1` | Assemble each read group into contigs with SPAdes (`5.1` is the Oxford Nanopore alternative using Flye). Assembling each bin separately shows how contig quality responds to the stringency of read selection. |
-| `6.0`, `6.1` | BLAST the contigs back to the anchor to confirm they came from the expected locus, and convert the hits to a BED track for viewing. This is the validation step: correctly assembled contigs align to the anchor interval at high identity. |
-| `7.0` | Split each contig into its own k-mer set, then remove k-mers found in the genome-wide repeat library and k-mers shared with the anchor genome. What survives is specific to the query. |
-| `8.0`, `8.1` | Count repeat and query-specific k-mers per contig, and write the retained k-mers to FASTA. Each header encodes query genotype, k-mer threshold, contig ID, contig length and k-mer number, so every k-mer can be traced back to its contig. |
-| `9.0` | Intersect the candidate k-mers with the query's raw-read k-mer database, giving the observed count of each k-mer in the reads. This is how sequencing-error k-mers are identified. |
-| `10.0`, `10.1` | Keep k-mers observed more than once in the raw reads, and write each surviving k-mer as an individual IBSpy reference sequence. |
-| `11.1`-`11.3` | Run IBSpy for every member of the panel against those reference k-mers: 827 Watkins landraces (`11.1`), 97 wild relatives (`11.2`), and pangenome and modern cultivars (`11.3`). IBSpy reports how many reference k-mers it observes per accession, which is used here as a presence/absence call. |
-| `12.1`, `12.2` | Build the run metadata file and combine the per-accession outputs into a single presence/absence matrix, with a k-mer sum giving the number of accessions carrying each k-mer. |
-| `14.0`, `15.0` | BLAST the reference k-mers back to the anchor sequence to place each one on the interval, and plot the resulting positions and alignment metrics. |
-| `16.0` | Cluster the presence/absence matrix (Jaccard distance, average linkage) with k-mers ordered by their position on the interval, and export the clustered k-mer sets. These are the candidate haplotype-tagging markers. |
+| [`KHaploTrackSingleAnchor/`](KHaploTrackSingleAnchor/) | The *k*-mer haplotype pipeline, single-anchor module 
 
-The numbering is inherited from the original pipeline and **has no step 13**.
+## Scripts by chapter
 
-## Running it
+### Chapter 2: Haplotype structure of known resistance loci using identity by state in Python (IBSpy)
 
-Every `.sh` file is a SLURM batch script for the John Innes Centre HPC; the Python steps run inside
-a Singularity image. Query accessions and anchor genomes are chosen by a SLURM array index into a
-bash array declared near the top of each script, so the array range and the accession list must
-agree. The configuration variables — `workDir`, `genome`, `region`, `cultivars` — sit together at
-the top of each file.
+- [`Chapter2_dataExtractionSyntenicWindowsYr7LinePlot.Rmd`](Chapter2_dataExtractionSyntenicWindowsYr7LinePlot.Rmd)
+- [`Chapter2_syntenicWindowsNLRsandnonNLRBlocls.qmd`](Chapter2_syntenicWindowsNLRsandnonNLRBlocls.qmd)
 
-`16.0` is the only step that runs locally rather than on the cluster; its `work_dir` points at a
-local analysis directory.
+### Chapter 3: A *k*-mer-based framework for haplotype reconstruction and marker discovery
 
-**These scripts are not portable as they stand.** Paths, module names and Singularity image names
-are specific to that cluster, and the input data is not in this repository: the wheat genome
-assemblies, the raw reads for the three panels, and the precomputed KMC k-mer databases all live in
-institutional storage. The module is published as the record of how the analysis was run.
+- [`Chapter3_IBSpyHelperPipeline.ipynb`](Chapter3_IBSpyHelperPipeline.ipynb)
+- [`Chapter3_dotPlotsNucmerAlign_v2.rmd`](Chapter3_dotPlotsNucmerAlign_v2.rmd)
+- [`Chapter3_extractSyntenicWindowsPangenomes_Aug172026.qmd`](Chapter3_extractSyntenicWindowsPangenomes_Aug172026.qmd)
+- [`Chapter3_mummerAlignChr2DPangenomes.sh`](Chapter3_mummerAlignChr2DPangenomes.sh)
+- [`Chapter3_mummerDotplotFunctions.R`](Chapter3_mummerDotplotFunctions.R)
+
+### Chapter 4: Structural variation at the *Yr47* locus in wheat pangenomes and representative resistant and susceptible Watkins landrace genomes
+
+- [`Chapter4_NLRAnnotatorThesis.sh`](Chapter4_NLRAnnotatorThesis.sh)
+- [`Chapter4_addGeneCoordsToNLRTrackerExtractNBARCSeqs.ipynb`](Chapter4_addGeneCoordsToNLRTrackerExtractNBARCSeqs.ipynb)
+- [`Chapter4_bedtoolsIntersect.sh`](Chapter4_bedtoolsIntersect.sh)
+- [`Chapter4_blastPangenomesToAnchorGeneSeqsThesis.sh`](Chapter4_blastPangenomesToAnchorGeneSeqsThesis.sh)
+- [`Chapter4_customRiparianPlotThesis.Rmd`](Chapter4_customRiparianPlotThesis.Rmd)
+- [`Chapter4_dotPlotFiguresWatkinsPGsChr5B.rmd`](Chapter4_dotPlotFiguresWatkinsPGsChr5B.rmd)
+- [`Chapter4_nucmer5BPangenomesThesis.sh`](Chapter4_nucmer5BPangenomesThesis.sh)
+- [`Chapter4_pafGenSimilarityMatAllvsAllGenes.ipynb`](Chapter4_pafGenSimilarityMatAllvsAllGenes.ipynb)
+- [`Chapter4_plot_yr47_orthogroup_tree.py`](Chapter4_plot_yr47_orthogroup_tree.py)
+
+### Chapter 5: Genetics of *Yr47* resistance using an F5:6 derived Paragon x WATDE0042 biparental mapping population
+
+- [`Chapter5_F5_PxW308_RIL_DataAnalysis.Rmd`](Chapter5_F5_PxW308_RIL_DataAnalysis.Rmd)
+- [`Chapter5_FilterSNPsBlast.ipynb`](Chapter5_FilterSNPsBlast.ipynb)
+- [`Chapter5_bwaMEMAlign.sh`](Chapter5_bwaMEMAlign.sh)
+- [`Chapter5_fastqcTrim.sh`](Chapter5_fastqcTrim.sh)
+- [`Chapter5_filterBlastKASP-SNPs.py`](Chapter5_filterBlastKASP-SNPs.py)
+- [`Chapter5_filterKaspSNPsRunBlast.sh`](Chapter5_filterKaspSNPsRunBlast.sh)
+- [`Chapter5_freebayesCallVariants.sh`](Chapter5_freebayesCallVariants.sh)
+- [`Chapter5_starMapping.sh`](Chapter5_starMapping.sh)
+- [`Chapter5_stringtie.sh`](Chapter5_stringtie.sh)
 
 ## Software
 
-KMC v3.1.1, samtools v1.18, SeqKit v0.12.0, SPAdes v3.13.1, Flye v2.7.1, BLAST+ v2.12.0, minimap2,
-[IBSpy](https://github.com/Uauy-Lab/IBSpy) v0.3.1, Python 3, R.
+Scripts call KMC, samtools, SeqKit, SPAdes, Flye, BLAST+, minimap2, MUMmer, STAR, StringTie,
+freebayes, bedtools, NLR-Annotator and [IBSpy](https://github.com/Uauy-Lab/IBSpy), with analysis
+in Python 3 and R. Versions are recorded in the individual scripts and in each chapter's methods
+section in the thesis.
+
+## Citing
+
+<!-- add the thesis citation, and a Zenodo DOI if you mint one from the v1.0-thesis tag -->
